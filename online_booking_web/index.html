@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nupur Beauty Parlour - Festive & Online Booking</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <!-- Firebase SDKs -->
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+  <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+  <div class="background-decorations">
+    <div class="glow-sphere sphere-1"></div>
+    <div class="glow-sphere sphere-2"></div>
+    <div class="glow-sphere sphere-3"></div>
+  </div>
+
+  <div class="container">
+    <!-- Header -->
+    <header class="header">
+      <div class="diya-badge">✨ Festive Special Online Booking ✨</div>
+      <h1 class="brand-title">Nupur Beauty Parlour</h1>
+      <p class="brand-subtitle">(Only for Ladies) • Salon & Spa</p>
+      <div class="divider"><span>✨</span></div>
+      <p class="tagline">Book your preferred festive beauty appointment online with ease</p>
+    </header>
+
+    <!-- Main Booking Form Card -->
+    <div class="booking-card">
+      <form id="bookingForm">
+        <!-- Section 1: Customer Details -->
+        <div class="form-section">
+          <h2 class="section-title">
+            <span class="step-num">1</span> Your Contact Details
+          </h2>
+          <div class="input-grid">
+            <div class="form-group">
+              <label for="custName">Full Name <span class="required">*</span></label>
+              <input type="text" id="custName" placeholder="e.g. Priyanka Patel" required autocomplete="name">
+            </div>
+            <div class="form-group">
+              <label for="custPhone">WhatsApp / Mobile Number <span class="required">*</span></label>
+              <input type="tel" id="custPhone" placeholder="e.g. 9876543210" pattern="[0-9]{10}" maxlength="10" required
+                autocomplete="tel">
+              <small class="hint">Confirmation message will be sent to this WhatsApp number</small>
+            </div>
+          </div>
+        </div>
+
+        <!-- Section 2: Services Selection -->
+        <div class="form-section">
+          <h2 class="section-title">
+            <span class="step-num">2</span> Select Services <span class="required">*</span>
+          </h2>
+          <div class="services-wrapper" id="servicesContainer">
+            <!-- Services injected by JavaScript -->
+          </div>
+          <div class="selected-summary" id="selectedSummary" style="display: none;">
+            <span>Selected Services: <strong id="selectedCount">0</strong></span>
+            <span>Estimated Total: <strong id="selectedTotal">₹0</strong></span>
+          </div>
+        </div>
+
+        <!-- Section 3: Date & Time -->
+        <div class="form-section">
+          <h2 class="section-title">
+            <span class="step-num">3</span> Select Date & Time Slot
+          </h2>
+          <div class="input-grid">
+            <div class="form-group">
+              <label for="bookingDate">Appointment Date <span class="required">*</span></label>
+              <input type="date" id="bookingDate" required>
+            </div>
+            <div class="form-group">
+              <label for="timeSlot">Preferred Time Slot <span class="required">*</span></label>
+              <select id="timeSlot" required>
+                <option value="" disabled selected>Select Time Slot...</option>
+                <option value="09:00 AM">Morning 09:00 AM</option>
+                <option value="10:30 AM">Morning 10:30 AM</option>
+                <option value="12:00 PM">Noon 12:00 PM</option>
+                <option value="02:00 PM">Afternoon 02:00 PM</option>
+                <option value="03:30 PM">Afternoon 03:30 PM</option>
+                <option value="05:00 PM">Evening 05:00 PM</option>
+                <option value="06:30 PM">Evening 06:30 PM</option>
+                <option value="08:00 PM">Night 08:00 PM</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <!-- Section 4: Special Note -->
+        <div class="form-section">
+          <h2 class="section-title">
+            <span class="step-num">4</span> Special Requests / Notes
+          </h2>
+          <div class="form-group">
+            <textarea id="notes" rows="2" placeholder="Any specific requirements or remarks (optional)"></textarea>
+          </div>
+        </div>
+
+        <!-- Submit Button -->
+        <div class="submit-section">
+          <button type="submit" id="submitBtn" class="btn-submit">
+            <span class="btn-icon">✨</span>
+            <span class="btn-text">Submit Booking Request</span>
+          </button>
+          <p class="submit-note">🔒 Your details are secure. You will receive a WhatsApp confirmation upon parlour
+            review.</p>
+        </div>
+      </form>
+    </div>
+
+    <!-- Success Modal -->
+    <div class="modal-backdrop" id="successModal">
+      <div class="modal-card">
+        <div class="modal-icon">🎉</div>
+        <h2>Booking Request Received!</h2>
+        <p class="modal-subtitle">Your appointment request has been sent to Nupur Beauty Parlour.</p>
+
+        <div class="receipt-box" id="receiptBox">
+          <!-- Injected by JS -->
+        </div>
+
+        <p class="modal-note">You will receive a confirmation message on WhatsApp once confirmed by the parlour.</p>
+
+        <div class="modal-actions">
+          <button type="button" class="btn-whatsapp" id="btnSendWhatsApp">
+            <span>💬</span> Send Request on WhatsApp
+          </button>
+          <button type="button" class="btn-secondary" onclick="window.location.reload()">
+            Book Another Appointment
+          </button>
+        </div>
+      </div>
+    </div>
+    3
+    <!-- Footer -->
+    <footer class="footer">
+      <p>© 2026 Nupur Beauty Parlour • All Rights Reserved</p>
+      <p>Have a wonderful & glowing festive season! ✨</p>
+    </footer>
+  </div>
+
+  <script src="firebase-config.js"></script>
+  <script src="app.js"></script>
+</body>
+
+</html>

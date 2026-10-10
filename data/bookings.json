@@ -4,12 +4,51 @@
     "bookingRef": "NP-701664",
     "customerName": "Jash Godhasara",
     "customerPhone": "9427451121",
-    "serviceNames": "Festive Golden Glow Package (Facial + D-Tan + Wax + Threading), Festive Party Makeup & Hair Styling Combo, Hair Spa + Herbal Cleanup + Manicure Combo",
+    "serviceNames": "Festive Golden Glow Package, Festive Party Makeup Combo, Hair Spa",
     "totalAmount": 4497,
     "bookingDate": "2026-10-10",
     "timeSlot": "12:00 PM",
     "status": "Pending",
     "notes": "",
     "createdAt": "2026-10-10T12:20:00.000Z"
+  },
+  {
+    "id": "NP-103001",
+    "bookingRef": "NP-103001",
+    "customerName": "Pooja Patel",
+    "customerPhone": "9876543210",
+    "serviceNames": "Festive Golden Glow Package (Facial + D-Tan + Wax + Threading)",
+    "totalAmount": 1499,
+    "bookingDate": "2026-10-10",
+    "timeSlot": "10:30 AM",
+    "status": "Pending",
+    "notes": "",
+    "createdAt": "2026-10-10T12:15:00.000Z"
+  },
+  {
+    "id": "NP-020002",
+    "bookingRef": "NP-020002",
+    "customerName": "Riddhi Shah",
+    "customerPhone": "9825123456",
+    "serviceNames": "Festive Party Makeup & Hair Styling Combo",
+    "totalAmount": 1999,
+    "bookingDate": "2026-10-10",
+    "timeSlot": "02:00 PM",
+    "status": "Pending",
+    "notes": "",
+    "createdAt": "2026-10-10T12:25:00.000Z"
+  },
+  {
+    "id": "NP-033003",
+    "bookingRef": "NP-033003",
+    "customerName": "Komal Dave",
+    "customerPhone": "9428765432",
+    "serviceNames": "Hair Spa + Herbal Cleanup + Manicure Combo",
+    "totalAmount": 999,
+    "bookingDate": "2026-10-10",
+    "timeSlot": "03:30 PM",
+    "status": "Pending",
+    "notes": "",
+    "createdAt": "2026-10-10T12:30:00.000Z"
   }
 ]

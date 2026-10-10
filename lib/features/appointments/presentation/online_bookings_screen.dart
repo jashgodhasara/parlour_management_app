@@ -155,6 +155,11 @@ class FirestoreBookingService {
       'https://nupur-beauty-parlour.onrender.com/';
   static const String defaultBackendApiUrl =
       'https://nupur-beauty-parlour.onrender.com/api';
+  static const List<String> backendEndpoints = [
+    'https://nupur-beauty-parlour.onrender.com/api',
+    'https://nupur-beauty-parlour-api.onrender.com/api',
+    'http://192.168.1.11:10000/api',
+  ];
   static const String prefsKeyProjectId = 'firebase_firestore_project_id';
   static const String prefsKeyBookingUrl = 'online_booking_web_url';
 
@@ -178,59 +183,70 @@ class FirestoreBookingService {
     await prefs.setString(prefsKeyBookingUrl, url.trim());
   }
 
-  /// Fetch bookings from live Render Backend API
+  /// Fetch bookings from live Backend API (tries Render, then local Wi-Fi)
   static Future<List<OnlineBooking>> fetchFromBackendApi() async {
-    try {
-      final url = Uri.parse('$defaultBackendApiUrl/bookings');
-      final response = await http.get(url).timeout(const Duration(seconds: 10));
-      if (response.statusCode == 200) {
-        final decoded = jsonDecode(response.body);
-        if (decoded is List) {
-          return decoded
-              .map((e) => OnlineBooking.fromJson(e as Map<String, dynamic>))
-              .toList();
+    for (final base in backendEndpoints) {
+      try {
+        final url = Uri.parse('$base/bookings');
+        final response =
+            await http.get(url).timeout(const Duration(seconds: 4));
+        if (response.statusCode == 200) {
+          final decoded = jsonDecode(response.body);
+          if (decoded is List) {
+            return decoded
+                .map((e) => OnlineBooking.fromJson(e as Map<String, dynamic>))
+                .toList();
+          }
         }
-      }
-    } catch (e) {
-      debugPrint('Error fetching from Render Backend API: $e');
+      } catch (_) {}
     }
     return [];
   }
 
-  /// Update booking status on Render Backend API ('Confirmed' or 'Cancelled')
+  /// Update booking status on Backend API ('Confirmed' or 'Cancelled')
   static Future<bool> updateStatusOnBackendApi({
     required String bookingId,
     required String newStatus,
   }) async {
-    try {
-      final url = Uri.parse('$defaultBackendApiUrl/bookings/$bookingId/status');
-      final response = await http.post(
-        url,
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'status': newStatus}),
-      ).timeout(const Duration(seconds: 10));
-      return response.statusCode == 200;
-    } catch (e) {
-      debugPrint('Error updating status on Render API: $e');
-      return false;
+    bool ok = false;
+    for (final base in backendEndpoints) {
+      try {
+        final url = Uri.parse('$base/bookings/$bookingId/status');
+        final response = await http
+            .post(
+              url,
+              headers: {'Content-Type': 'application/json'},
+              body: jsonEncode({'status': newStatus}),
+            )
+            .timeout(const Duration(seconds: 4));
+        if (response.statusCode == 200) {
+          ok = true;
+        }
+      } catch (_) {}
     }
+    return ok;
   }
 
-  /// Sync app manual appointments to Render Backend API so slots are locked on website
+  /// Sync app manual appointments to Backend API so slots are locked on website
   static Future<bool> syncAppAppointmentsToBackendApi(
       List<Map<String, dynamic>> appointments) async {
-    try {
-      final url = Uri.parse('$defaultBackendApiUrl/sync-app-appointments');
-      final response = await http.post(
-        url,
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'appointments': appointments}),
-      ).timeout(const Duration(seconds: 10));
-      return response.statusCode == 200;
-    } catch (e) {
-      debugPrint('Error syncing app appointments to Render API: $e');
-      return false;
+    bool ok = false;
+    for (final base in backendEndpoints) {
+      try {
+        final url = Uri.parse('$base/sync-app-appointments');
+        final response = await http
+            .post(
+              url,
+              headers: {'Content-Type': 'application/json'},
+              body: jsonEncode({'appointments': appointments}),
+            )
+            .timeout(const Duration(seconds: 4));
+        if (response.statusCode == 200) {
+          ok = true;
+        }
+      } catch (_) {}
     }
+    return ok;
   }
 
   /// Fetch bookings from Firestore REST API

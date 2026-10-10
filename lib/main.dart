@@ -10,6 +10,7 @@ import 'package:flutter_contacts/flutter_contacts.dart' as phone_contacts;
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:googleapis/drive/v3.dart' as drive;
 import 'package:http/http.dart' as http;
+import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
@@ -840,9 +841,13 @@ class _ParlourHomeState extends State<ParlourHome> with WidgetsBindingObserver {
           onAddBill: (customer) => _addBill(forCustomer: customer)),
       _AppointmentsPage(
           appointments: _appointments,
+          parlourName: _parlourName,
+          shopPhone: _shopPhone,
+          shopAddress: _shopAddress,
           onAddAppointment: () => _addAppointment(),
           onAddAppointmentForDate: (date) => _addAppointment(initialDate: date),
           onOpenOnlineBookings: _openOnlineBookingsScreen,
+          onAddConfirmedOnlineBooking: _addConfirmedOnlineBooking,
           onEditAppointment: _editAppointment,
           onConfirmAppointment: _confirmAppointment,
           onMarkArrived: _markAppointmentArrived,
@@ -1678,6 +1683,45 @@ class _ParlourHomeState extends State<ParlourHome> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> _addConfirmedOnlineBooking({
+    required String customerName,
+    required String customerPhone,
+    required String serviceName,
+    required DateTime date,
+    required TimeOfDay time,
+    required double amount,
+  }) async {
+    final existingIndex = _customers.indexWhere(
+      (c) =>
+          c.name.toLowerCase() == customerName.toLowerCase() ||
+          (customerPhone.isNotEmpty && c.phone == customerPhone),
+    );
+    if (existingIndex == -1 && customerName.isNotEmpty) {
+      final newCust =
+          Customer(customerName, customerPhone, '', 'Online Booking');
+      setState(() => _customers.add(newCust));
+    }
+
+    final appointment = Appointment(
+      customerName,
+      serviceName,
+      date,
+      time,
+      'Confirmed',
+    );
+
+    setState(() => _appointments.add(appointment));
+    await _saveState();
+
+    await scheduleAppointmentNotification(
+      appointment,
+      customerPhone,
+      enabled: _bookingReminderEnabled,
+      reminderMinutes: _reminderMinutes,
+    );
+    unawaited(scheduleDailySummaryNotification(_appointments));
+  }
+
   Future<void> _openOnlineBookingsScreen() async {
     await Navigator.of(context).push(
       MaterialPageRoute(
@@ -1698,44 +1742,7 @@ class _ParlourHomeState extends State<ParlourHome> with WidgetsBindingObserver {
               'status': a.status,
             };
           }).toList(),
-          onAddConfirmedAppointment: ({
-            required String customerName,
-            required String customerPhone,
-            required String serviceName,
-            required DateTime date,
-            required TimeOfDay time,
-            required double amount,
-          }) async {
-            final existingIndex = _customers.indexWhere(
-              (c) =>
-                  c.name.toLowerCase() == customerName.toLowerCase() ||
-                  (customerPhone.isNotEmpty && c.phone == customerPhone),
-            );
-            if (existingIndex == -1 && customerName.isNotEmpty) {
-              final newCust =
-                  Customer(customerName, customerPhone, '', 'Online Booking');
-              setState(() => _customers.add(newCust));
-            }
-
-            final appointment = Appointment(
-              customerName,
-              serviceName,
-              date,
-              time,
-              'Confirmed',
-            );
-
-            setState(() => _appointments.add(appointment));
-            await _saveState();
-
-            await scheduleAppointmentNotification(
-              appointment,
-              customerPhone,
-              enabled: _bookingReminderEnabled,
-              reminderMinutes: _reminderMinutes,
-            );
-            unawaited(scheduleDailySummaryNotification(_appointments));
-          },
+          onAddConfirmedAppointment: _addConfirmedOnlineBooking,
         ),
       ),
     );
@@ -3909,6 +3916,10 @@ class _AppointmentsPage extends StatefulWidget {
     required this.onAddAppointment,
     required this.onAddAppointmentForDate,
     this.onOpenOnlineBookings,
+    this.onAddConfirmedOnlineBooking,
+    this.parlourName = '',
+    this.shopPhone = '',
+    this.shopAddress = '',
     required this.onEditAppointment,
     required this.onConfirmAppointment,
     required this.onMarkArrived,
@@ -3919,6 +3930,17 @@ class _AppointmentsPage extends StatefulWidget {
   final VoidCallback onAddAppointment;
   final ValueChanged<DateTime> onAddAppointmentForDate;
   final VoidCallback? onOpenOnlineBookings;
+  final Future<void> Function({
+    required String customerName,
+    required String customerPhone,
+    required String serviceName,
+    required DateTime date,
+    required TimeOfDay time,
+    required double amount,
+  })? onAddConfirmedOnlineBooking;
+  final String parlourName;
+  final String shopPhone;
+  final String shopAddress;
   final ValueChanged<Appointment> onEditAppointment;
   final ValueChanged<Appointment> onConfirmAppointment;
   final ValueChanged<Appointment> onMarkArrived;
@@ -3933,6 +3955,8 @@ class _AppointmentsPageState extends State<_AppointmentsPage> {
   late DateTime _selectedDate;
   late DateTime _rangeStart;
   late DateTime _rangeEnd;
+  List<OnlineBooking> _onlineBookings = [];
+  Timer? _onlinePollingTimer;
 
   @override
   void initState() {
@@ -3942,6 +3966,16 @@ class _AppointmentsPageState extends State<_AppointmentsPage> {
     _selectedDate = DateTime(today.year, today.month, today.day);
     _rangeStart = DateTime(2000, 1, 1);
     _rangeEnd = DateTime(today.year, today.month, today.day);
+    _loadOnlineBookings();
+    _onlinePollingTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+      if (mounted) _loadOnlineBookings(silent: true);
+    });
+  }
+
+  @override
+  void dispose() {
+    _onlinePollingTimer?.cancel();
+    super.dispose();
   }
 
   @override
@@ -3950,6 +3984,318 @@ class _AppointmentsPageState extends State<_AppointmentsPage> {
     if (!_isSameMonth(_selectedDate, _visibleMonth)) {
       _selectedDate = DateTime(_visibleMonth.year, _visibleMonth.month, 1);
     }
+  }
+
+  Future<void> _loadOnlineBookings({bool silent = false}) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString('nupur_online_bookings_list');
+      List<OnlineBooking> list = [];
+      if (raw != null && raw.isNotEmpty) {
+        final decoded = jsonDecode(raw) as List<dynamic>;
+        list = decoded.map((e) => OnlineBooking.fromJson(e as Map<String, dynamic>)).toList();
+      }
+
+      final projId = await FirestoreBookingService.getProjectId();
+      if (projId.isNotEmpty) {
+        try {
+          final live = await FirestoreBookingService.fetchFromFirestore(projId);
+          if (live.isNotEmpty) {
+            final map = {for (var b in list) b.id: b};
+            for (var b in live) {
+              map[b.id] = b;
+            }
+            list = map.values.toList();
+          }
+        } catch (_) {}
+      }
+
+      await prefs.setString(
+          'nupur_online_bookings_list', jsonEncode(list.map((e) => e.toJson()).toList()));
+
+      if (mounted) {
+        setState(() {
+          _onlineBookings = list;
+        });
+      }
+    } catch (_) {}
+  }
+
+  String _cleanPhoneForWhatsApp(String phone) {
+    final digits = phone.replaceAll(RegExp(r'\D'), '');
+    if (digits.length == 10) return '91$digits';
+    return digits;
+  }
+
+  TimeOfDay _parseTimeOfDay(String timeSlot) {
+    try {
+      final parts = timeSlot.split(' ');
+      final timeParts = parts[0].split(':');
+      int hour = int.parse(timeParts[0]);
+      final int minute = int.parse(timeParts[1]);
+      if (parts.length > 1 && parts[1].toUpperCase() == 'PM' && hour < 12) {
+        hour += 12;
+      }
+      if (parts.length > 1 && parts[1].toUpperCase() == 'AM' && hour == 12) {
+        hour = 0;
+      }
+      return TimeOfDay(hour: hour, minute: minute);
+    } catch (_) {
+      return const TimeOfDay(hour: 10, minute: 0);
+    }
+  }
+
+  Future<void> _confirmOnlineBookingDirectly(OnlineBooking booking) async {
+    final timeOfDay = _parseTimeOfDay(booking.timeSlot);
+
+    if (widget.onAddConfirmedOnlineBooking != null) {
+      await widget.onAddConfirmedOnlineBooking!(
+        customerName: booking.customerName,
+        customerPhone: booking.customerPhone,
+        serviceName: booking.serviceNames,
+        date: booking.bookingDate,
+        time: timeOfDay,
+        amount: booking.totalAmount,
+      );
+    }
+
+    final projId = await FirestoreBookingService.getProjectId();
+    if (projId.isNotEmpty) {
+      await FirestoreBookingService.updateStatusInFirestore(
+        projectId: projId,
+        docId: booking.id,
+        newStatus: 'Confirmed',
+      );
+    }
+
+    final updated = _onlineBookings
+        .map((b) => b.id == booking.id ? b.copyWith(status: 'Confirmed') : b)
+        .toList();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+        'nupur_online_bookings_list', jsonEncode(updated.map((e) => e.toJson()).toList()));
+
+    setState(() {
+      _onlineBookings = updated;
+    });
+
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('✅ બુકિંગ કન્ફર્મ થયું: ${booking.customerName}! WhatsApp ખોલી રહ્યું છે...'),
+        backgroundColor: Colors.green.shade700,
+      ),
+    );
+
+    if (booking.customerPhone.isNotEmpty) {
+      final phone = _cleanPhoneForWhatsApp(booking.customerPhone);
+      final dateFormatted = DateFormat('dd/MM/yyyy').format(booking.bookingDate);
+      final parlour = widget.parlourName.isNotEmpty ? widget.parlourName : 'Nupur Beauty Parlour';
+      final address = widget.shopAddress.isNotEmpty
+          ? widget.shopAddress
+          : 'Nupur Beauty Parlour (Only for Ladies)';
+
+      final message = '''
+🌸 *${parlour}* 🌸
+✨ *બુકિંગ કન્ફર્મેશન / Booking Confirmed* ✨
+
+નમસ્તે *${booking.customerName}* જી! 🙏
+તમારું બ્યુટી પાર્લર એપોઇન્ટમેન્ટ બુકિંગ કન્ફર્મ થઈ ગયું છે.
+(Your appointment has been *CONFIRMED*!)
+
+📋 *બુકિંગ આઈડી / Booking ID:* #${booking.bookingRef}
+📅 *તારીખ / Date:* $dateFormatted
+⏰ *સમય સ્લોટ / Time Slot:* ${booking.timeSlot}
+💅 *સર્વિસ / Services:* ${booking.serviceNames}
+💰 *કુલ અંદાજિત રકમ / Estimated Total:* ₹${booking.totalAmount.toStringAsFixed(0)}
+
+📍 *સ્થળ / Address:* $address
+📞 *સંપર્ક / Phone:* ${widget.shopPhone}
+
+જો તમારે સમયમાં કોઈ ફેરફાર કરવો હોય તો કૃપા કરીને આ નંબર પર જાણ કરશો.
+અમે તમારી સેવામાં હાજર રહીશું! આભાર! 💖
+''';
+
+      final uri = Uri.parse('https://wa.me/$phone?text=${Uri.encodeComponent(message)}');
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+      }
+    }
+  }
+
+  Future<void> _rejectOnlineBookingDirectly(OnlineBooking booking) async {
+    final projId = await FirestoreBookingService.getProjectId();
+    if (projId.isNotEmpty) {
+      await FirestoreBookingService.updateStatusInFirestore(
+        projectId: projId,
+        docId: booking.id,
+        newStatus: 'Cancelled',
+      );
+    }
+
+    final updated = _onlineBookings
+        .map((b) => b.id == booking.id ? b.copyWith(status: 'Cancelled') : b)
+        .toList();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+        'nupur_online_bookings_list', jsonEncode(updated.map((e) => e.toJson()).toList()));
+
+    setState(() {
+      _onlineBookings = updated;
+    });
+
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('❌ રિક્વેસ્ટ રદ થઈ. વેબસાઇટ પર સ્લોટ ફરીથી Free થઈ ગયો છે.'),
+        backgroundColor: Colors.red,
+      ),
+    );
+  }
+
+  Widget _buildDirectOnlineRequestTile(OnlineBooking req) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xffFFFBEB),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.amber.shade400, width: 1.8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(5),
+                    decoration: BoxDecoration(
+                      color: Colors.amber.shade100,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Icon(Icons.language_rounded, color: Colors.amber, size: 16),
+                  ),
+                  const SizedBox(width: 8),
+                  const Text(
+                    '🌐 નવી ઓનલાઇન બુકિંગ વિનંતી',
+                    style: TextStyle(
+                        fontWeight: FontWeight.bold, fontSize: 13, color: Color(0xff92400E)),
+                  ),
+                ],
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: Colors.amber.shade200,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Text(
+                  'Pending',
+                  style:
+                      TextStyle(fontWeight: FontWeight.bold, fontSize: 11, color: Color(0xff78350F)),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            req.customerName,
+            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15.5),
+          ),
+          Text(
+            '📱 ${req.customerPhone}  •  #${req.bookingRef}',
+            style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+          ),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.amber.shade200),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.access_time_rounded, size: 15, color: Color(0xff0369A1)),
+                    const SizedBox(width: 4),
+                    Text(
+                      req.timeSlot,
+                      style: const TextStyle(
+                          fontWeight: FontWeight.bold, fontSize: 13, color: Color(0xff0369A1)),
+                    ),
+                  ],
+                ),
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    child: Text(
+                      req.serviceNames,
+                      style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                ),
+                Text(
+                  '₹${req.totalAmount.toStringAsFixed(0)}',
+                  style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 14, color: Colors.green),
+                ),
+              ],
+            ),
+          ),
+          if (req.notes.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(
+              '📝 નોંધ: ${req.notes}',
+              style: TextStyle(
+                  fontSize: 11.5, fontStyle: FontStyle.italic, color: Colors.amber.shade900),
+            ),
+          ],
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                flex: 4,
+                child: OutlinedButton(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.red.shade700,
+                    side: BorderSide(color: Colors.red.shade300),
+                    visualDensity: VisualDensity.compact,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  onPressed: () => _rejectOnlineBookingDirectly(req),
+                  child: const Text('❌ રદ કરો (Reject)',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                flex: 5,
+                child: FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xff0369A1),
+                    visualDensity: VisualDensity.compact,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  onPressed: () => _confirmOnlineBookingDirectly(req),
+                  icon: const Icon(Icons.check_circle_outline_rounded, size: 16),
+                  label: const Text('✅ કન્ફર્મ & WhatsApp',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -3966,6 +4312,16 @@ class _AppointmentsPageState extends State<_AppointmentsPage> {
       for (final appointment in monthAppointments) appointment.date.day,
     }.length;
     final freeDays = daysInMonth - bookedDays;
+
+    final datePendingRequests = _onlineBookings
+        .where((b) =>
+            b.status.toLowerCase() == 'pending' &&
+            _isSameDay(b.bookingDate, _selectedDate))
+        .toList();
+
+    final allPendingRequests = _onlineBookings
+        .where((b) => b.status.toLowerCase() == 'pending')
+        .toList();
 
     return ListView(
       padding: const EdgeInsets.all(16),
@@ -4020,47 +4376,54 @@ class _AppointmentsPageState extends State<_AppointmentsPage> {
             ),
           ],
         ),
-        if (widget.onOpenOnlineBookings != null) ...[
+        if (allPendingRequests.isNotEmpty) ...[
           const SizedBox(height: 12),
-          InkWell(
-            borderRadius: BorderRadius.circular(16),
-            onTap: widget.onOpenOnlineBookings,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              decoration: BoxDecoration(
-                color: const Color(0xff0369A1).withOpacity(0.08),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: const Color(0xff0369A1).withOpacity(0.2)),
-              ),
-              child: Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(6),
-                    decoration: BoxDecoration(
-                      color: const Color(0xff0369A1),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: const Icon(Icons.language_rounded, color: Colors.white, size: 16),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(
+              color: const Color(0xffFFFBEB),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: Colors.amber.shade400, width: 1.5),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.notification_important_rounded,
+                    color: Colors.amber.shade800, size: 24),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '🔔 ${allPendingRequests.length} નવી ઓનલાઇન બુકિંગ વિનંતી!',
+                        style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13.5,
+                            color: Colors.amber.shade900),
+                      ),
+                      Text(
+                        'ગ્રાહક: ${allPendingRequests.first.customerName} (${DateFormat('dd-MMM').format(allPendingRequests.first.bookingDate)} - ${allPendingRequests.first.timeSlot})',
+                        style: const TextStyle(fontSize: 11.5, color: Colors.black87),
+                      ),
+                    ],
                   ),
-                  const SizedBox(width: 10),
-                  const Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Online Web Bookings (ઓનલાઇન બુકિંગ)',
-                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-                        ),
-                        Text(
-                          'ગ્રાહકની સ્લોટ વિનંતી કન્ફર્મ કરો અને WhatsApp મોકલો',
-                          style: TextStyle(fontSize: 11, color: Colors.grey),
-                        ),
-                      ],
-                    ),
+                ),
+                FilledButton.tonal(
+                  style: FilledButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                   ),
-                  const Icon(Icons.arrow_forward_ios_rounded, size: 14, color: Color(0xff0369A1)),
-                ],
-              ),
+                  onPressed: () {
+                    final req = allPendingRequests.first;
+                    setState(() {
+                      _selectedDate = req.bookingDate;
+                      _visibleMonth =
+                          DateTime(req.bookingDate.year, req.bookingDate.month);
+                    });
+                  },
+                  child: const Text('તપાસો', style: TextStyle(fontSize: 12)),
+                ),
+              ],
             ),
           ),
         ],
@@ -4129,7 +4492,12 @@ class _AppointmentsPageState extends State<_AppointmentsPage> {
         const SizedBox(height: 16),
         _SectionTitle(_selectedDateLabel(context, _selectedDate)),
         const SizedBox(height: 8),
-        if (selectedAppointments.isEmpty)
+
+        // 1. Direct Online Booking Requests on this selected day
+        ...datePendingRequests.map((req) => _buildDirectOnlineRequestTile(req)),
+
+        // 2. Confirmed / existing appointments on this selected day
+        if (selectedAppointments.isEmpty && datePendingRequests.isEmpty)
           Container(
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(

@@ -550,26 +550,27 @@ select option {
   gap: 12px;
 }
 
-.btn-whatsapp {
-  background: #25d366;
+.btn-primary-action {
+  background: linear-gradient(135deg, var(--primary) 0%, var(--primary-light) 50%, var(--accent-gold-dark) 100%);
   color: #fff;
-  border: none;
-  font-size: 1rem;
+  border: 1px solid var(--accent-gold-light);
+  font-size: 1.05rem;
   font-weight: 600;
-  padding: 14px 22px;
+  padding: 14px 28px;
   border-radius: var(--radius-md);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
+  width: 100%;
   transition: all 0.25s;
-  box-shadow: 0 4px 18px rgba(37, 211, 102, 0.35);
+  box-shadow: 0 4px 18px rgba(155, 29, 61, 0.45);
 }
 
-.btn-whatsapp:hover {
-  background: #20ba5a;
-  transform: translateY(-1px);
+.btn-primary-action:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 22px rgba(212, 175, 55, 0.4);
 }
 
 .btn-secondary {

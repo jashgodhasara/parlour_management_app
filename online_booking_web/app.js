@@ -440,21 +440,4 @@ function showSuccessModal(data) {
   `;
 
   modal.classList.add("open");
-
-  // WhatsApp Button for Customer
-  const btnWhatsApp = document.getElementById("btnSendWhatsApp");
-  btnWhatsApp.onclick = () => {
-    const msg = encodeURIComponent(
-      `✨ *Nupur Beauty Parlour - Online Booking Request*\n\n` +
-      `👤 *Name:* ${data.customerName}\n` +
-      `📞 *Mobile:* ${data.customerPhone}\n` +
-      `📅 *Date:* ${data.bookingDate}\n` +
-      `⏰ *Time Slot:* ${data.timeSlot}\n` +
-      `💅 *Services:* ${data.serviceNames}\n` +
-      `💰 *Estimated Total:* ₹${data.totalAmount}\n` +
-      (data.notes ? `📝 *Note:* ${data.notes}\n` : ``) +
-      `\nPlease confirm my appointment booking. Thank you!`
-    );
-    window.open(`https://wa.me/${PARLOUR_WHATSAPP_NUMBER}?text=${msg}`, "_blank");
-  };
 }

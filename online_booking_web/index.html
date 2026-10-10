@@ -70,34 +70,46 @@
         <!-- Section 3: Date & Time -->
         <div class="form-section">
           <h2 class="section-title">
-            <span class="step-num">3</span> Select Date & Time Slot
+            <span class="step-num">3</span> Select Date & Time Slot (તારીખ અને સમય)
           </h2>
-          <div class="input-grid">
+          <div class="date-selection-box">
             <div class="form-group">
-              <label for="bookingDate">Appointment Date <span class="required">*</span></label>
+              <label for="bookingDate">Appointment Date (મુલાકાતની તારીખ) <span class="required">*</span></label>
               <input type="date" id="bookingDate" required>
             </div>
-            <div class="form-group">
-              <label for="timeSlot">Preferred Time Slot <span class="required">*</span></label>
-              <select id="timeSlot" required>
-                <option value="" disabled selected>Select Time Slot...</option>
-                <option value="09:00 AM">Morning 09:00 AM</option>
-                <option value="10:30 AM">Morning 10:30 AM</option>
-                <option value="12:00 PM">Noon 12:00 PM</option>
-                <option value="02:00 PM">Afternoon 02:00 PM</option>
-                <option value="03:30 PM">Afternoon 03:30 PM</option>
-                <option value="05:00 PM">Evening 05:00 PM</option>
-                <option value="06:30 PM">Evening 06:30 PM</option>
-                <option value="08:00 PM">Night 08:00 PM</option>
-              </select>
+            <div class="slot-status-box" id="slotStatusBox">
+              <span class="slot-status-icon">📅</span>
+              <span id="slotStatusText">Checking available slots...</span>
             </div>
+          </div>
+
+          <!-- Time Slots Container -->
+          <div class="slots-wrapper">
+            <label class="slots-heading">
+              Choose Available Slot (ઉપલબ્ધ સમય પસંદ કરો) <span class="required">*</span>
+            </label>
+            
+            <div class="slot-legend">
+              <span class="legend-item"><span class="legend-dot available"></span> Free Slot (ઉપલબ્ધ સ્લોટ)</span>
+              <span class="legend-item"><span class="legend-dot booked"></span> Already Booked Slot (પહેલેથી બુક થયેલ - ડિસેબલ)</span>
+              <span class="legend-item"><span class="legend-dot selected"></span> Selected (પસંદ કરેલ)</span>
+            </div>
+
+            <div class="slots-grid" id="slotsGrid">
+              <!-- Dynamically rendered by app.js -->
+            </div>
+
+            <!-- Fallback select element kept synced for form submission -->
+            <select id="timeSlot" name="timeSlot" required style="position: absolute; opacity: 0; pointer-events: none; height: 0; width: 0;">
+              <option value="" disabled selected>Select Time Slot</option>
+            </select>
           </div>
         </div>
 
         <!-- Section 4: Special Note -->
         <div class="form-section">
           <h2 class="section-title">
-            <span class="step-num">4</span> Special Requests / Notes
+            <span class="step-num">4</span> Special Requests / Notes (વિશેષ નોંધ)
           </h2>
           <div class="form-group">
             <textarea id="notes" rows="2" placeholder="Any specific requirements or remarks (optional)"></textarea>
@@ -108,10 +120,9 @@
         <div class="submit-section">
           <button type="submit" id="submitBtn" class="btn-submit">
             <span class="btn-icon">✨</span>
-            <span class="btn-text">Submit Booking Request</span>
+            <span class="btn-text">Submit Booking Request (બુકિંગ વિનંતી મોકલો)</span>
           </button>
-          <p class="submit-note">🔒 Your details are secure. You will receive a WhatsApp confirmation upon parlour
-            review.</p>
+          <p class="submit-note">🔒 Your details are secure. You will receive a WhatsApp confirmation once approved by the parlour.</p>
         </div>
       </form>
     </div>
@@ -121,13 +132,19 @@
       <div class="modal-card">
         <div class="modal-icon">🎉</div>
         <h2>Booking Request Received!</h2>
-        <p class="modal-subtitle">Your appointment request has been sent to Nupur Beauty Parlour.</p>
+        <div class="modal-subtitle-guj">તમારી બુકિંગ વિનંતી મળી ગઈ છે!</div>
+        <p class="modal-subtitle">Your appointment request has been sent to Nupur Beauty Parlour for confirmation.</p>
 
         <div class="receipt-box" id="receiptBox">
           <!-- Injected by JS -->
         </div>
 
-        <p class="modal-note">You will receive a confirmation message on WhatsApp once confirmed by the parlour.</p>
+        <div class="confirmation-info-banner">
+          <div class="info-icon">📲</div>
+          <div class="info-text">
+            <strong>કન્ફર્મેશન માહિતી:</strong> પાર્લર દ્વારા તમારી વિનંતી તપાસીને કન્ફર્મ થતાં જ તમારા WhatsApp નંબર પર કન્ફર્મેશન મેસેજ મોકલવામાં આવશે.
+          </div>
+        </div>
 
         <div class="modal-actions">
           <button type="button" class="btn-whatsapp" id="btnSendWhatsApp">
@@ -139,7 +156,7 @@
         </div>
       </div>
     </div>
-    3
+
     <!-- Footer -->
     <footer class="footer">
       <p>© 2026 Nupur Beauty Parlour • All Rights Reserved</p>

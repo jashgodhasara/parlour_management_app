@@ -1685,6 +1685,19 @@ class _ParlourHomeState extends State<ParlourHome> with WidgetsBindingObserver {
           parlourName: _parlourName,
           shopPhone: _shopPhone,
           shopAddress: _shopAddress,
+          existingAppointments: _appointments.map((a) {
+            final hour = a.time.hourOfPeriod == 0 ? 12 : a.time.hourOfPeriod;
+            final minute = a.time.minute.toString().padLeft(2, '0');
+            final period = a.time.period == DayPeriod.am ? 'AM' : 'PM';
+            final slot = '${hour.toString().padLeft(2, '0')}:$minute $period';
+            return {
+              'customerName': a.customerName,
+              'serviceName': a.serviceName,
+              'date': a.date,
+              'timeSlot': slot,
+              'status': a.status,
+            };
+          }).toList(),
           onAddConfirmedAppointment: ({
             required String customerName,
             required String customerPhone,
@@ -4035,11 +4048,11 @@ class _AppointmentsPageState extends State<_AppointmentsPage> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Online Web Bookings',
+                          'Online Web Bookings (ઓનલાઇન બુકિંગ)',
                           style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
                         ),
                         Text(
-                          'Tap to review & confirm customer requests',
+                          'ગ્રાહકની સ્લોટ વિનંતી કન્ફર્મ કરો અને WhatsApp મોકલો',
                           style: TextStyle(fontSize: 11, color: Colors.grey),
                         ),
                       ],

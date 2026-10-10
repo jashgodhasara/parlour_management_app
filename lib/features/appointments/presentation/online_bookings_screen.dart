@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -62,6 +63,55 @@ class OnlineBooking {
     );
   }
 
+  factory OnlineBooking.fromFirestoreDoc(Map<String, dynamic> doc) {
+    final namePath = doc['name'] as String? ?? '';
+    final docId = namePath.split('/').last;
+    final fields = doc['fields'] as Map<String, dynamic>? ?? {};
+
+    String getString(String key, [String def = '']) {
+      final f = fields[key];
+      if (f is Map && f.containsKey('stringValue')) {
+        return f['stringValue'] as String? ?? def;
+      }
+      return def;
+    }
+
+    double getDouble(String key, [double def = 0.0]) {
+      final f = fields[key];
+      if (f is Map) {
+        if (f.containsKey('doubleValue')) {
+          return (f['doubleValue'] as num?)?.toDouble() ?? def;
+        }
+        if (f.containsKey('integerValue')) {
+          return double.tryParse(f['integerValue'].toString()) ?? def;
+        }
+      }
+      return def;
+    }
+
+    DateTime parseDate(String val) {
+      try {
+        return DateTime.parse(val);
+      } catch (_) {
+        return DateTime.now();
+      }
+    }
+
+    return OnlineBooking(
+      id: docId,
+      bookingRef: getString('bookingRef', 'NP-${(100000 + (docId.hashCode % 900000)).abs()}'),
+      customerName: getString('customerName', 'Unknown Customer'),
+      customerPhone: getString('customerPhone', ''),
+      serviceNames: getString('serviceNames', 'General Parlour Service'),
+      totalAmount: getDouble('totalAmount', 0.0),
+      bookingDate: parseDate(getString('bookingDate')),
+      timeSlot: getString('timeSlot', '10:00 AM'),
+      status: getString('status', 'Pending'),
+      createdAt: parseDate(getString('createdAt', doc['createTime'] as String? ?? '')),
+      notes: getString('notes', ''),
+    );
+  }
+
   Map<String, dynamic> toJson() {
     return {
       'id': id,
@@ -98,18 +148,136 @@ class OnlineBooking {
   }
 }
 
+/// Firebase Firestore REST Service for Online Bookings
+class FirestoreBookingService {
+  static const String defaultProjectId = 'parlour-management-app';
+  static const String defaultBookingUrl =
+      'http://192.168.1.11/dipa/parlour_management_app/online_booking_web/';
+  static const String prefsKeyProjectId = 'firebase_firestore_project_id';
+  static const String prefsKeyBookingUrl = 'online_booking_web_url';
+
+  static Future<String> getProjectId() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(prefsKeyProjectId) ?? defaultProjectId;
+  }
+
+  static Future<void> saveProjectId(String id) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(prefsKeyProjectId, id.trim());
+  }
+
+  static Future<String> getBookingUrl() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(prefsKeyBookingUrl) ?? defaultBookingUrl;
+  }
+
+  static Future<void> saveBookingUrl(String url) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(prefsKeyBookingUrl, url.trim());
+  }
+
+  /// Fetch bookings from Firestore REST API
+  static Future<List<OnlineBooking>> fetchFromFirestore(String projectId) async {
+    final url = Uri.parse(
+      'https://firestore.googleapis.com/v1/projects/$projectId/databases/(default)/documents/online_bookings',
+    );
+    final response = await http.get(url).timeout(const Duration(seconds: 10));
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final docs = data['documents'] as List<dynamic>? ?? [];
+      return docs
+          .map((d) => OnlineBooking.fromFirestoreDoc(d as Map<String, dynamic>))
+          .toList();
+    } else {
+      throw Exception('Firestore HTTP ${response.statusCode}: ${response.body}');
+    }
+  }
+
+  /// Update booking status in Firestore ('Confirmed' or 'Cancelled')
+  static Future<bool> updateStatusInFirestore({
+    required String projectId,
+    required String docId,
+    required String newStatus,
+  }) async {
+    try {
+      final url = Uri.parse(
+        'https://firestore.googleapis.com/v1/projects/$projectId/databases/(default)/documents/online_bookings/$docId?updateMask.fieldPaths=status',
+      );
+      final response = await http
+          .patch(
+            url,
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'fields': {
+                'status': {'stringValue': newStatus},
+              },
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
+
+      return response.statusCode == 200;
+    } catch (e) {
+      debugPrint('Error updating Firestore status: $e');
+      return false;
+    }
+  }
+
+  /// Create a new booking / lock slot in Firestore
+  static Future<bool> createBookingInFirestore({
+    required String projectId,
+    required OnlineBooking booking,
+  }) async {
+    try {
+      final url = Uri.parse(
+        'https://firestore.googleapis.com/v1/projects/$projectId/databases/(default)/documents/online_bookings?documentId=${booking.id}',
+      );
+      final response = await http
+          .post(
+            url,
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'fields': {
+                'bookingRef': {'stringValue': booking.bookingRef},
+                'customerName': {'stringValue': booking.customerName},
+                'customerPhone': {'stringValue': booking.customerPhone},
+                'serviceNames': {'stringValue': booking.serviceNames},
+                'totalAmount': {'doubleValue': booking.totalAmount},
+                'bookingDate': {
+                  'stringValue':
+                      DateFormat('yyyy-MM-dd').format(booking.bookingDate)
+                },
+                'timeSlot': {'stringValue': booking.timeSlot},
+                'status': {'stringValue': booking.status},
+                'notes': {'stringValue': booking.notes},
+                'createdAt': {'stringValue': booking.createdAt.toIso8601String()},
+              },
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
+
+      return response.statusCode == 200;
+    } catch (e) {
+      debugPrint('Error creating Firestore booking: $e');
+      return false;
+    }
+  }
+}
+
 class OnlineBookingsScreen extends StatefulWidget {
   const OnlineBookingsScreen({
     super.key,
     required this.parlourName,
     required this.shopPhone,
     required this.shopAddress,
+    this.existingAppointments,
     required this.onAddConfirmedAppointment,
   });
 
   final String parlourName;
   final String shopPhone;
   final String shopAddress;
+  final List<Map<String, dynamic>>? existingAppointments;
   final Future<void> Function({
     required String customerName,
     required String customerPhone,
@@ -128,37 +296,78 @@ class _OnlineBookingsScreenState extends State<OnlineBookingsScreen> {
   List<OnlineBooking> _bookings = [];
   String _selectedFilter = 'Pending';
   bool _isLoading = false;
+  String _firebaseProjectId = FirestoreBookingService.defaultProjectId;
+  String _bookingWebUrl = FirestoreBookingService.defaultBookingUrl;
+  bool _hasPromptedPending = false;
 
   @override
   void initState() {
     super.initState();
-    _loadBookings();
+    _loadSettingsAndBookings();
+  }
+
+  Future<void> _loadSettingsAndBookings() async {
+    final projId = await FirestoreBookingService.getProjectId();
+    final url = await FirestoreBookingService.getBookingUrl();
+    if (mounted) {
+      setState(() {
+        _firebaseProjectId = projId;
+        _bookingWebUrl = url;
+      });
+    }
+    await _loadBookings();
   }
 
   Future<void> _loadBookings() async {
     setState(() => _isLoading = true);
+
+    // 1. Load from local cache first
     final prefs = await SharedPreferences.getInstance();
     final rawJson = prefs.getString(_storageKey);
+    List<OnlineBooking> localList = [];
 
     if (rawJson != null && rawJson.isNotEmpty) {
       try {
         final List<dynamic> list = jsonDecode(rawJson) as List<dynamic>;
-        _bookings = list
+        localList = list
             .map((item) => OnlineBooking.fromJson(item as Map<String, dynamic>))
             .toList();
       } catch (e) {
-        debugPrint('Error decoding bookings: $e');
+        debugPrint('Error decoding local bookings: $e');
       }
     }
 
-    if (_bookings.isEmpty) {
-      _bookings = [
+    // 2. Fetch live from Firestore
+    bool syncedWithFirestore = false;
+    try {
+      if (_firebaseProjectId.isNotEmpty) {
+        final firestoreList =
+            await FirestoreBookingService.fetchFromFirestore(_firebaseProjectId);
+        if (firestoreList.isNotEmpty) {
+          // Merge or replace with firestore list
+          final Map<String, OnlineBooking> map = {
+            for (var b in localList) b.id: b,
+          };
+          for (var b in firestoreList) {
+            map[b.id] = b;
+          }
+          localList = map.values.toList();
+          syncedWithFirestore = true;
+        }
+      }
+    } catch (e) {
+      debugPrint('Firestore fetch failed (using local cache): $e');
+    }
+
+    // 3. Fallback mock data if completely empty
+    if (localList.isEmpty) {
+      localList = [
         OnlineBooking(
           id: 'ob_01',
           bookingRef: 'NP-582910',
           customerName: 'Pooja Patel',
           customerPhone: '9876543210',
-          serviceNames: 'Diwali Golden Glow Package (Facial + D-Tan + Wax), Hair Spa',
+          serviceNames: 'Festive Golden Glow Package (Facial + D-Tan + Wax), Hair Spa',
           totalAmount: 2149.0,
           bookingDate: DateTime.now().add(const Duration(days: 1)),
           timeSlot: '10:30 AM',
@@ -166,25 +375,43 @@ class _OnlineBookingsScreenState extends State<OnlineBookingsScreen> {
           createdAt: DateTime.now().subtract(const Duration(minutes: 25)),
           notes: 'Festive party makeup inquiry as well.',
         ),
-        OnlineBooking(
-          id: 'ob_02',
-          bookingRef: 'NP-819324',
-          customerName: 'Dhara Shah',
-          customerPhone: '9123456780',
-          serviceNames: 'Gold Facial, Eyebrow & Upper Lip, Festive Mehendi',
-          totalAmount: 1420.0,
-          bookingDate: DateTime.now().add(const Duration(days: 2)),
-          timeSlot: '03:30 PM',
-          status: 'Pending',
-          createdAt: DateTime.now().subtract(const Duration(hours: 2)),
-          notes: 'Please keep slot sharp at 3:30 PM.',
-        ),
       ];
-      await _saveBookings();
     }
+
+    // Sort by created descending
+    localList.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+
+    _bookings = localList;
+    await _saveBookings();
 
     if (mounted) {
       setState(() => _isLoading = false);
+
+      if (syncedWithFirestore) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('✅ Synced with Firebase Firestore!'),
+            backgroundColor: Color(0xff0369A1),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+
+      // Check if there are pending bookings and automatically prompt confirmation
+      _checkAndPromptPendingBooking();
+    }
+  }
+
+  void _checkAndPromptPendingBooking() {
+    if (_hasPromptedPending) return;
+    final pending = _bookings.where((b) => b.status == 'Pending').toList();
+    if (pending.isNotEmpty) {
+      _hasPromptedPending = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _showConfirmationRequestDialog(pending.first);
+        }
+      });
     }
   }
 
@@ -218,46 +445,162 @@ class _OnlineBookingsScreenState extends State<OnlineBookingsScreen> {
     }
   }
 
-  Future<void> _confirmBooking(OnlineBooking booking) async {
-    final confirm = await showDialog<bool>(
+  /// Primary Ask Confirmation Request Dialog
+  Future<void> _showConfirmationRequestDialog(OnlineBooking booking) async {
+    final dateFormatted = DateFormat('dd/MM/yyyy (EEEE)').format(booking.bookingDate);
+
+    showDialog(
       context: context,
+      barrierDismissible: true,
       builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Row(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+        titlePadding: const EdgeInsets.fromLTRB(20, 20, 20, 10),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+        title: Row(
           children: [
-            Icon(Icons.check_circle_rounded, color: Colors.green),
-            SizedBox(width: 8),
-            Text('Confirm Booking'),
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.amber.shade100,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Icon(Icons.notifications_active_rounded,
+                  color: Colors.amber, size: 24),
+            ),
+            const SizedBox(width: 12),
+            const Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'નવી બુકિંગ વિનંતી!',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 17,
+                      color: Color(0xff0F172A),
+                    ),
+                  ),
+                  Text(
+                    'New Online Booking Request',
+                    style: TextStyle(fontSize: 12, color: Colors.grey),
+                  ),
+                ],
+              ),
+            ),
           ],
         ),
-        content: Text(
-          'Confirm booking for ${booking.customerName}?\n\n'
-          '📅 Date: ${DateFormat('dd-MMM-yyyy').format(booking.bookingDate)}\n'
-          '⏰ Time: ${booking.timeSlot}\n'
-          '💅 Services: ${booking.serviceNames}\n\n'
-          'Confirming will add this appointment and open WhatsApp to send confirmation message.',
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Divider(),
+            const SizedBox(height: 6),
+            _buildDetailRow(Icons.person_rounded, 'ગ્રાહક (Customer):', booking.customerName),
+            _buildDetailRow(Icons.phone_rounded, 'મોબાઈલ (Mobile):', booking.customerPhone),
+            _buildDetailRow(Icons.calendar_today_rounded, 'તારીખ (Date):', dateFormatted),
+            _buildDetailRow(Icons.access_time_rounded, 'સમય સ્લોટ (Slot):', booking.timeSlot, isHighlight: true),
+            _buildDetailRow(Icons.auto_awesome, 'સર્વિસ (Services):', booking.serviceNames),
+            _buildDetailRow(Icons.currency_rupee_rounded, 'કુલ રકમ (Total):', '₹${booking.totalAmount.toStringAsFixed(0)}', isBold: true),
+            if (booking.notes.isNotEmpty)
+              _buildDetailRow(Icons.edit_note_rounded, 'નોંધ (Note):', booking.notes),
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: const Color(0xffF0FDF4),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.green.shade200),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.info_outline, size: 16, color: Colors.green.shade700),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'કન્ફર્મ કરતાં જ સ્લોટ વેબસાઇટ પર ડિસેબલ થઈ જશે અને ગ્રાહકને WhatsApp મેસેજ જશે.',
+                      style: TextStyle(fontSize: 11.5, color: Colors.green.shade900),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
+        actionsPadding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
+          OutlinedButton(
+            style: OutlinedButton.styleFrom(
+              foregroundColor: Colors.red.shade700,
+              side: BorderSide(color: Colors.red.shade300),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            onPressed: () {
+              Navigator.pop(ctx);
+              _cancelBooking(booking);
+            },
+            child: const Text('❌ રદ કરો (Reject)'),
           ),
           FilledButton.icon(
             style: FilledButton.styleFrom(
               backgroundColor: const Color(0xff0369A1),
               foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             ),
-            onPressed: () => Navigator.pop(ctx, true),
-            icon: const Icon(Icons.send_rounded, size: 18),
-            label: const Text('Confirm & WhatsApp'),
+            onPressed: () {
+              Navigator.pop(ctx);
+              _confirmBooking(booking);
+            },
+            icon: const Icon(Icons.send_rounded, size: 16),
+            label: const Text('✅ કન્ફર્મ & WhatsApp'),
           ),
         ],
       ),
     );
+  }
 
-    if (confirm != true) return;
+  Widget _buildDetailRow(IconData icon, String label, String val,
+      {bool isHighlight = false, bool isBold = false}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 16, color: const Color(0xff0369A1)),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 120,
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 12.5,
+                color: Colors.grey.shade700,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              val,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: isBold || isHighlight ? FontWeight.bold : FontWeight.w600,
+                color: isHighlight
+                    ? const Color(0xff0369A1)
+                    : (isBold ? Colors.black87 : const Color(0xff1E293B)),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
+  /// Confirm Booking: Updates Firestore, adds to app schedule, launches WhatsApp
+  Future<void> _confirmBooking(OnlineBooking booking) async {
     final timeOfDay = _parseTimeOfDay(booking.timeSlot);
+
+    // 1. Add to local appointment schedule
     await widget.onAddConfirmedAppointment(
       customerName: booking.customerName,
       customerPhone: booking.customerPhone,
@@ -267,6 +610,16 @@ class _OnlineBookingsScreenState extends State<OnlineBookingsScreen> {
       amount: booking.totalAmount,
     );
 
+    // 2. Update status in Firestore
+    if (_firebaseProjectId.isNotEmpty) {
+      await FirestoreBookingService.updateStatusInFirestore(
+        projectId: _firebaseProjectId,
+        docId: booking.id,
+        newStatus: 'Confirmed',
+      );
+    }
+
+    // 3. Update local state
     setState(() {
       final index = _bookings.indexWhere((b) => b.id == booking.id);
       if (index != -1) {
@@ -279,34 +632,44 @@ class _OnlineBookingsScreenState extends State<OnlineBookingsScreen> {
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('✅ Booking confirmed for ${booking.customerName}!'),
+        content: Text('✅ Booking confirmed for ${booking.customerName}! WhatsApp is opening...'),
         backgroundColor: Colors.green.shade700,
+        duration: const Duration(seconds: 3),
       ),
     );
 
-    _sendWhatsAppConfirmation(booking);
+    // 4. Send Bilingual WhatsApp Confirmation
+    await _sendBilingualWhatsAppConfirmation(booking);
   }
 
-  Future<void> _sendWhatsAppConfirmation(OnlineBooking booking) async {
+  /// Send Bilingual WhatsApp Confirmation Message to customer
+  Future<void> _sendBilingualWhatsAppConfirmation(OnlineBooking booking) async {
     final phone = _cleanPhoneForWhatsApp(booking.customerPhone);
     final dateFormatted = DateFormat('dd/MM/yyyy').format(booking.bookingDate);
+    final parlour = widget.parlourName.isNotEmpty ? widget.parlourName : 'Nupur Beauty Parlour';
+    final address = widget.shopAddress.isNotEmpty ? widget.shopAddress : 'Nupur Beauty Parlour (Only for Ladies)';
 
     final message = '''
-🌸 *${widget.parlourName.isNotEmpty ? widget.parlourName : 'Nupur Beauty Parlour'}* 🌸
-Hello *${booking.customerName}*! ✨
+🌸 *${parlour}* 🌸
+✨ *બુકિંગ કન્ફર્મેશન / Booking Confirmed* ✨
 
-Your festive booking is *CONFIRMED*. 🪔
+નમસ્તે *${booking.customerName}* જી! 🙏
+તમારું બ્યુટી પાર્લર એપોઇન્ટમેન્ટ બુકિંગ કન્ફર્મ થઈ ગયું છે.
+(Your appointment has been *CONFIRMED*!)
 
-📋 *Booking ID:* #${booking.bookingRef}
-📅 *Date:* $dateFormatted
-⏰ *Time:* ${booking.timeSlot}
-💅 *Services:* ${booking.serviceNames}
-💰 *Estimated Amount:* ₹${booking.totalAmount.toStringAsFixed(0)}
+📋 *બુકિંગ આઈડી / Booking ID:* #${booking.bookingRef}
+📅 *તારીખ / Date:* $dateFormatted
+⏰ *સમય સ્લોટ / Time Slot:* ${booking.timeSlot}
+💅 *સર્વિસ / Services:* ${booking.serviceNames}
+💰 *કુલ અંદાજિત રકમ / Estimated Total:* ₹${booking.totalAmount.toStringAsFixed(0)}
 
-📍 *Address:* ${widget.shopAddress.isNotEmpty ? widget.shopAddress : 'Nupur Beauty Parlour'}
-📞 *Contact:* ${widget.shopPhone}
+📍 *સ્થળ / Address:* $address
+📞 *સંપર્ક / Phone:* ${widget.shopPhone}
 
-We look forward to welcoming you! Have a wonderful day. 🙏
+જો તમારે સમયમાં કોઈ ફેરફાર કરવો હોય તો કૃપા કરીને આ નંબર પર જાણ કરશો.
+(If you need to reschedule or have questions, please inform us on this number.)
+
+અમે તમારી સેવામાં હાજર રહીશું! આભાર! 💖
 ''';
 
     final uri = Uri.parse(
@@ -318,23 +681,24 @@ We look forward to welcoming you! Have a wonderful day. 🙏
     }
   }
 
+  /// Cancel/Reject booking
   Future<void> _cancelBooking(OnlineBooking booking) async {
     final reasonController = TextEditingController();
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Reject / Cancel Booking'),
+        title: const Text('Reject Booking / બુકિંગ રદ કરો'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Cancel booking for ${booking.customerName}?'),
+            Text('Do you want to cancel booking for ${booking.customerName}?'),
             const SizedBox(height: 12),
             TextField(
               controller: reasonController,
               decoration: const InputDecoration(
-                labelText: 'Reason / Alternate Time (Optional)',
-                hintText: 'e.g. Slot is full, please visit at 5:00 PM',
+                labelText: 'Reason / વૈકલ્પિક સમય (Optional)',
+                hintText: 'e.g. સ્લોટ ફુલ છે, સાંજે 5:00 વાગ્યે આવો',
               ),
             ),
           ],
@@ -355,6 +719,15 @@ We look forward to welcoming you! Have a wonderful day. 🙏
 
     if (confirm != true) return;
 
+    // Update in Firestore
+    if (_firebaseProjectId.isNotEmpty) {
+      await FirestoreBookingService.updateStatusInFirestore(
+        projectId: _firebaseProjectId,
+        docId: booking.id,
+        newStatus: 'Cancelled',
+      );
+    }
+
     setState(() {
       final index = _bookings.indexWhere((b) => b.id == booking.id);
       if (index != -1) {
@@ -368,16 +741,22 @@ We look forward to welcoming you! Have a wonderful day. 🙏
     });
     await _saveBookings();
 
+    // Send Rejection message on WhatsApp
     final phone = _cleanPhoneForWhatsApp(booking.customerPhone);
     final note = reasonController.text.trim();
-    final message = '''
-🌸 *${widget.parlourName.isNotEmpty ? widget.parlourName : 'Nupur Beauty Parlour'}* 🌸
-Hello *${booking.customerName}*,
+    final dateFormatted = DateFormat('dd/MM/yyyy').format(booking.bookingDate);
+    final parlour = widget.parlourName.isNotEmpty ? widget.parlourName : 'Nupur Beauty Parlour';
 
-We regret to inform you that your requested time slot on ${DateFormat('dd/MM/yyyy').format(booking.bookingDate)} at ${booking.timeSlot} is currently unavailable.
-${note.isNotEmpty ? '\n📝 *Note:* $note\n' : ''}
-Please contact us to choose an alternate time.
-📞 *Contact:* ${widget.shopPhone}
+    final message = '''
+🌸 *${parlour}* 🌸
+નમસ્તે *${booking.customerName}* જી! 🙏
+
+અમને જણાવતા ખેદ થાય છે કે તારીખ $dateFormatted અને સમય ${booking.timeSlot} નો સ્લોટ હાલ ઉપલબ્ધ નથી.
+(We regret to inform you that your requested time slot is unavailable.)
+${note.isNotEmpty ? '\n📝 *નોંધ / Note:* $note\n' : ''}
+કૃપા કરીને અન્ય અનુકૂળ સમય પસંદ કરવા માટે અમારો સંપર્ક કરશો.
+(Please contact us to choose an alternate time.)
+📞 *સંપર્ક / Contact:* ${widget.shopPhone}
 ''';
 
     final uri = Uri.parse(
@@ -389,7 +768,71 @@ Please contact us to choose an alternate time.
     }
   }
 
+  /// Dialog to customize Firebase Settings
+  void _showFirebaseSettingsDialog() {
+    final controller = TextEditingController(text: _firebaseProjectId);
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Row(
+          children: [
+            Icon(Icons.cloud_sync_rounded, color: Color(0xff0369A1)),
+            SizedBox(width: 8),
+            Text('Firebase Sync Settings'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Enter your Firebase Project ID to sync online bookings over internet from anywhere:',
+              style: TextStyle(fontSize: 13.5),
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: controller,
+              decoration: const InputDecoration(
+                labelText: 'Firebase Project ID',
+                hintText: 'e.g. parlour-management-app',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 10),
+            const Text(
+              '💡 Customer requests will appear automatically here, and confirmed slots will be locked on the web form.',
+              style: TextStyle(fontSize: 11.5, color: Colors.grey),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xff0369A1)),
+            onPressed: () async {
+              final newId = controller.text.trim();
+              if (newId.isNotEmpty) {
+                await FirestoreBookingService.saveProjectId(newId);
+                setState(() => _firebaseProjectId = newId);
+                Navigator.pop(ctx);
+                _loadBookings();
+              }
+            },
+            child: const Text('Save & Sync'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Dialog to Share Booking Link
   void _showShareLinkDialog() {
+    final urlController = TextEditingController(text: _bookingWebUrl);
+
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -406,30 +849,22 @@ Please contact us to choose an alternate time.
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'Share this link with your customers via WhatsApp, Instagram, or Status for online bookings:',
-              style: TextStyle(fontSize: 14),
-            ),
-            const SizedBox(height: 14),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.grey.shade100,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.grey.shade300),
-              ),
-              child: const SelectableText(
-                'http://192.168.1.11/dipa/parlour_management_app/online_booking_web/',
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xff0369A1),
-                  fontSize: 13,
-                ),
-              ),
+              'Share this link with your customers via WhatsApp, Instagram, or Status:',
+              style: TextStyle(fontSize: 13.5),
             ),
             const SizedBox(height: 12),
+            TextField(
+              controller: urlController,
+              decoration: const InputDecoration(
+                labelText: 'Booking Web URL',
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.language),
+              ),
+            ),
+            const SizedBox(height: 10),
             const Text(
-              '💡 Customers can open this link on their mobile and book instantly.',
-              style: TextStyle(fontSize: 12, color: Colors.grey),
+              '💡 Customers can open this link on their mobile to enter name, number and pick an available slot.',
+              style: TextStyle(fontSize: 11.5, color: Colors.grey),
             ),
           ],
         ),
@@ -440,14 +875,19 @@ Please contact us to choose an alternate time.
               foregroundColor: Colors.white,
             ),
             onPressed: () async {
+              final url = urlController.text.trim();
+              await FirestoreBookingService.saveBookingUrl(url);
+              setState(() => _bookingWebUrl = url);
               Navigator.pop(ctx);
+
               final text = '''
-✨ *Nupur Beauty Parlour - Festive & Diwali Booking* 🪔
-Book your preferred slot & festive beauty package online:
+✨ *${widget.parlourName.isNotEmpty ? widget.parlourName : 'Nupur Beauty Parlour'}* ✨
+નમસ્તે! હવે તમે તમારા મનપસંદ સમયે પાર્લર એપોઇન્ટમેન્ટ ઓનલાઇન બુક કરાવી શકો છો:
+(Book your beauty appointment online with ease!)
 
-🔗 Booking Link: http://192.168.1.11/dipa/parlour_management_app/online_booking_web/
+🔗 *Booking Link:* $url
 
-Special festive packages & offers available! 💅🌸
+✨ સર્વિસ અને અનુકૂળ ટાઇમ સ્લોટ પસંદ કરીને બુક કરો! 💅🌸
 ''';
               final uri = Uri.parse('whatsapp://send?text=${Uri.encodeComponent(text)}');
               if (await canLaunchUrl(uri)) {
@@ -464,6 +904,91 @@ Special festive packages & offers available! 💅🌸
         ],
       ),
     );
+  }
+
+  /// Sync appointments created by Mummy in the app to the website so those slots show Already Booked
+  Future<void> _syncAppAppointmentsToWebsite() async {
+    final list = widget.existingAppointments;
+    if (list == null || list.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('કોઈ એપોઇન્ટમેન્ટ મળી નથી (No appointments in app to sync)'),
+        ),
+      );
+      return;
+    }
+
+    setState(() => _isLoading = true);
+    int syncedCount = 0;
+
+    for (final appt in list) {
+      final date = appt['date'] as DateTime?;
+      final slot = appt['timeSlot'] as String?;
+      final name = appt['customerName'] as String? ?? 'Client';
+      final service = appt['serviceName'] as String? ?? 'Parlour Service';
+
+      if (date == null || slot == null || slot.isEmpty) continue;
+
+      // Filter only today or upcoming
+      final today = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
+      final apptDate = DateTime(date.year, date.month, date.day);
+      if (apptDate.isBefore(today)) continue;
+
+      final dateStr = DateFormat('yyyy-MM-dd').format(date);
+
+      // Check if already in _bookings
+      final alreadyExists = _bookings.any(
+        (b) =>
+            DateFormat('yyyy-MM-dd').format(b.bookingDate) == dateStr &&
+            b.timeSlot.trim().toLowerCase() == slot.trim().toLowerCase() &&
+            b.status != 'Cancelled',
+      );
+
+      if (!alreadyExists) {
+        final newBooking = OnlineBooking(
+          id: 'app_mummy_${DateTime.now().millisecondsSinceEpoch}_$syncedCount',
+          bookingRef: 'NP-${100000 + (syncedCount * 137 % 900000)}',
+          customerName: name,
+          customerPhone: '',
+          serviceNames: service,
+          totalAmount: 0.0,
+          bookingDate: date,
+          timeSlot: slot,
+          status: 'Confirmed', // Confirmed marks the slot as Already Booked on the website!
+          createdAt: DateTime.now(),
+          notes: 'Booked directly by Mummy in parlour app',
+        );
+
+        if (_firebaseProjectId.isNotEmpty) {
+          try {
+            await FirestoreBookingService.createBookingInFirestore(
+              projectId: _firebaseProjectId,
+              booking: newBooking,
+            );
+          } catch (_) {}
+        }
+
+        _bookings.add(newBooking);
+        syncedCount++;
+      }
+    }
+
+    await _saveBookings();
+    setState(() => _isLoading = false);
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            syncedCount > 0
+                ? '✅ $syncedCount એપોઇન્ટમેન્ટ વેબસાઇટ પર લૉક થઈ ગઈ! (Slots marked Already Booked on website)'
+                : '✅ તમામ એપોઇન્ટમેન્ટ પહેલેથી જ વેબસાઇટ પર લૉક છે.',
+          ),
+          backgroundColor: Colors.green.shade700,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
   }
 
   @override
@@ -484,19 +1009,29 @@ Special festive packages & offers available! 💅🌸
               style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
             ),
             Text(
-              'Requests from online booking web form',
+              'ઓનલાઇન સ્લોટ બુકિંગ રિક્વેસ્ટ',
               style: TextStyle(fontSize: 12, color: Colors.grey),
             ),
           ],
         ),
         actions: [
           IconButton(
+            tooltip: 'Sync Mummy Appointments to Website (સ્લોટ લૉક કરો)',
+            icon: const Icon(Icons.cloud_upload_rounded, color: Color(0xff0369A1)),
+            onPressed: _syncAppAppointmentsToWebsite,
+          ),
+          IconButton(
+            tooltip: 'Firebase Settings',
+            icon: const Icon(Icons.cloud_sync_rounded, color: Color(0xff0369A1)),
+            onPressed: _showFirebaseSettingsDialog,
+          ),
+          IconButton(
             tooltip: 'Share Link',
             icon: const Icon(Icons.share_rounded, color: Color(0xff0369A1)),
             onPressed: _showShareLinkDialog,
           ),
           IconButton(
-            tooltip: 'Refresh',
+            tooltip: 'Refresh / Sync',
             icon: const Icon(Icons.refresh_rounded),
             onPressed: _loadBookings,
           ),
@@ -504,6 +1039,57 @@ Special festive packages & offers available! 💅🌸
       ),
       body: Column(
         children: [
+          // Pending banner if any requests exist
+          if (pendingCount > 0)
+            Container(
+              margin: const EdgeInsets.fromLTRB(16, 10, 16, 6),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: Colors.amber.shade50,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: Colors.amber.shade400, width: 1.5),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.notification_important_rounded,
+                      color: Colors.amber.shade800, size: 22),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '🔔 $pendingCount નવી બુકિંગ વિનંતીઓ પેન્ડિંગ છે!',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: Colors.amber.shade900,
+                            fontSize: 13,
+                          ),
+                        ),
+                        const Text(
+                          'ટેપ કરીને તપાસો અને ગ્રાહકને કન્ફર્મ કરો',
+                          style: TextStyle(fontSize: 11.5, color: Colors.black54),
+                        ),
+                      ],
+                    ),
+                  ),
+                  FilledButton.tonal(
+                    style: FilledButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    ),
+                    onPressed: () {
+                      final firstPending =
+                          _bookings.firstWhere((b) => b.status == 'Pending');
+                      _showConfirmationRequestDialog(firstPending);
+                    },
+                    child: const Text('Review', style: TextStyle(fontSize: 12)),
+                  ),
+                ],
+              ),
+            ),
+
+          // Filters
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             color: Theme.of(context).cardColor,
@@ -511,7 +1097,8 @@ Special festive packages & offers available! 💅🌸
               scrollDirection: Axis.horizontal,
               child: Row(
                 children: [
-                  _buildFilterChip('Pending', 'Pending (${pendingCount})', isUrgent: pendingCount > 0),
+                  _buildFilterChip('Pending', 'Pending ($pendingCount)',
+                      isUrgent: pendingCount > 0),
                   const SizedBox(width: 8),
                   _buildFilterChip('Confirmed', 'Confirmed'),
                   const SizedBox(width: 8),
@@ -523,6 +1110,8 @@ Special festive packages & offers available! 💅🌸
             ),
           ),
           const Divider(height: 1),
+
+          // Main list
           Expanded(
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator())
@@ -602,252 +1191,272 @@ Special festive packages & offers available! 💅🌸
         borderRadius: BorderRadius.circular(16),
         side: BorderSide(
           color: isPending
-              ? const Color(0xff38BDF8).withOpacity(0.7)
+              ? Colors.amber.shade400
               : (isConfirmed ? Colors.green.shade400 : const Color(0xffCBD5E1)),
-          width: isPending ? 1.5 : 1,
+          width: isPending ? 1.8 : 1,
         ),
       ),
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Expanded(
-                  child: Row(
-                    children: [
-                      CircleAvatar(
-                        radius: 20,
-                        backgroundColor: const Color(0xff0369A1).withOpacity(0.12),
-                        child: Text(
-                          item.customerName.isNotEmpty
-                              ? item.customerName.substring(0, 1).toUpperCase()
-                              : 'C',
-                          style: const TextStyle(
-                            color: Color(0xff0369A1),
-                            fontWeight: FontWeight.bold,
-                            fontSize: 16,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: isPending ? () => _showConfirmationRequestDialog(item) : null,
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: Row(
+                      children: [
+                        CircleAvatar(
+                          radius: 20,
+                          backgroundColor: const Color(0xff0369A1).withOpacity(0.12),
+                          child: Text(
+                            item.customerName.isNotEmpty
+                                ? item.customerName.substring(0, 1).toUpperCase()
+                                : 'C',
+                            style: const TextStyle(
+                              color: Color(0xff0369A1),
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16,
+                            ),
                           ),
                         ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              item.customerName,
-                              style: const TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 15,
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                item.customerName,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 15,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                               ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
+                              const SizedBox(height: 2),
+                              Text(
+                                '📱 ${item.customerPhone} • #${item.bookingRef}',
+                                style: TextStyle(
+                                  color: Colors.grey.shade600,
+                                  fontSize: 11.5,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  _buildStatusBadge(item.status),
+                ],
+              ),
+              const SizedBox(height: 10),
+              const Divider(height: 1),
+              const SizedBox(height: 10),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xffF0F7FF),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: const Color(0xff0369A1).withOpacity(0.18),
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Padding(
+                          padding: EdgeInsets.only(top: 2),
+                          child: Icon(Icons.auto_awesome, size: 15, color: Color(0xff0369A1)),
+                        ),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            item.serviceNames,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 13.5,
                             ),
-                            const SizedBox(height: 2),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(Icons.calendar_month_rounded,
+                                size: 14, color: Color(0xff64748B)),
+                            const SizedBox(width: 4),
                             Text(
-                              '📱 ${item.customerPhone} • #${item.bookingRef}',
-                              style: TextStyle(
-                                color: Colors.grey.shade600,
-                                fontSize: 11.5,
-                              ),
+                              DateFormat('dd MMM yyyy').format(item.bookingDate),
+                              style: const TextStyle(
+                                  fontWeight: FontWeight.w600, fontSize: 12.5),
                             ),
                           ],
                         ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 6),
-                _buildStatusBadge(item.status),
-              ],
-            ),
-            const SizedBox(height: 10),
-            const Divider(height: 1),
-            const SizedBox(height: 10),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: const Color(0xffF0F7FF),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: const Color(0xff0369A1).withOpacity(0.18),
-                ),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Padding(
-                        padding: EdgeInsets.only(top: 2),
-                        child: Icon(Icons.auto_awesome, size: 15, color: Color(0xff0369A1)),
-                      ),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(
-                          item.serviceNames,
+                        Row(
+                          children: [
+                            const Icon(Icons.access_time_rounded,
+                                size: 14, color: Color(0xff64748B)),
+                            const SizedBox(width: 4),
+                            Text(
+                              item.timeSlot,
+                              style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  color: Color(0xff0369A1),
+                                  fontSize: 12.5),
+                            ),
+                          ],
+                        ),
+                        Text(
+                          '₹${item.totalAmount.toStringAsFixed(0)}',
                           style: const TextStyle(
-                            fontWeight: FontWeight.w700,
-                            fontSize: 13.5,
+                            fontWeight: FontWeight.w900,
+                            color: Color(0xff0369A1),
+                            fontSize: 15,
                           ),
                         ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Row(
-                        children: [
-                          const Icon(Icons.calendar_month_rounded, size: 14, color: Color(0xff64748B)),
-                          const SizedBox(width: 4),
-                          Text(
-                            DateFormat('dd MMM yyyy').format(item.bookingDate),
-                            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12.5),
-                          ),
-                        ],
-                      ),
-                      Row(
-                        children: [
-                          const Icon(Icons.access_time_rounded, size: 14, color: Color(0xff64748B)),
-                          const SizedBox(width: 4),
-                          Text(
-                            item.timeSlot,
-                            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12.5),
-                          ),
-                        ],
-                      ),
-                      Text(
-                        '₹${item.totalAmount.toStringAsFixed(0)}',
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w900,
-                          color: Color(0xff0369A1),
-                          fontSize: 15,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            if (item.notes.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: Colors.amber.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.amber.withOpacity(0.25)),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(Icons.edit_note_rounded, size: 16, color: Colors.amber),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        item.notes,
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontStyle: FontStyle.italic,
-                          color: Colors.amber.shade900,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
+                      ],
                     ),
                   ],
                 ),
               ),
-            ],
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Material(
-                  color: Colors.blue.withOpacity(0.1),
-                  shape: const CircleBorder(),
-                  child: InkWell(
-                    customBorder: const CircleBorder(),
-                    onTap: () async {
-                      final uri = Uri.parse('tel:${item.customerPhone}');
-                      if (await canLaunchUrl(uri)) await launchUrl(uri);
-                    },
-                    child: const Padding(
-                      padding: EdgeInsets.all(9),
-                      child: Icon(Icons.call_rounded, color: Colors.blue, size: 19),
-                    ),
+              if (item.notes.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: Colors.amber.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.amber.withOpacity(0.25)),
                   ),
-                ),
-                const SizedBox(width: 6),
-                Material(
-                  color: const Color(0xff25D366).withOpacity(0.12),
-                  shape: const CircleBorder(),
-                  child: InkWell(
-                    customBorder: const CircleBorder(),
-                    onTap: () async {
-                      final phone = _cleanPhoneForWhatsApp(item.customerPhone);
-                      final uri = Uri.parse('https://wa.me/$phone');
-                      if (await canLaunchUrl(uri)) await launchUrl(uri);
-                    },
-                    child: const Padding(
-                      padding: EdgeInsets.all(9),
-                      child: Icon(Icons.chat_bubble_rounded, color: Color(0xff25D366), size: 19),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                if (isPending) ...[
-                  Expanded(
-                    flex: 4,
-                    child: OutlinedButton(
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: Colors.red.shade600,
-                        side: BorderSide(color: Colors.red.shade300),
-                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
-                        visualDensity: VisualDensity.compact,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.edit_note_rounded, size: 16, color: Colors.amber),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          item.notes,
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontStyle: FontStyle.italic,
+                            color: Colors.amber.shade900,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
                       ),
-                      onPressed: () => _cancelBooking(item),
-                      child: const Text('Reject', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                    ],
+                  ),
+                ),
+              ],
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Material(
+                    color: Colors.blue.withOpacity(0.1),
+                    shape: const CircleBorder(),
+                    child: InkWell(
+                      customBorder: const CircleBorder(),
+                      onTap: () async {
+                        final uri = Uri.parse('tel:${item.customerPhone}');
+                        if (await canLaunchUrl(uri)) await launchUrl(uri);
+                      },
+                      child: const Padding(
+                        padding: EdgeInsets.all(9),
+                        child: Icon(Icons.call_rounded, color: Colors.blue, size: 19),
+                      ),
                     ),
                   ),
                   const SizedBox(width: 6),
-                  Expanded(
-                    flex: 5,
-                    child: FilledButton.icon(
-                      style: FilledButton.styleFrom(
-                        backgroundColor: const Color(0xff0369A1),
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
-                        visualDensity: VisualDensity.compact,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  Material(
+                    color: const Color(0xff25D366).withOpacity(0.12),
+                    shape: const CircleBorder(),
+                    child: InkWell(
+                      customBorder: const CircleBorder(),
+                      onTap: () async {
+                        final phone = _cleanPhoneForWhatsApp(item.customerPhone);
+                        final uri = Uri.parse('https://wa.me/$phone');
+                        if (await canLaunchUrl(uri)) await launchUrl(uri);
+                      },
+                      child: const Padding(
+                        padding: EdgeInsets.all(9),
+                        child: Icon(Icons.chat_bubble_rounded,
+                            color: Color(0xff25D366), size: 19),
                       ),
-                      onPressed: () => _confirmBooking(item),
-                      icon: const Icon(Icons.check_circle_outline_rounded, size: 16),
-                      label: const Text('Confirm', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
                     ),
                   ),
-                ] else if (isConfirmed) ...[
-                  Expanded(
-                    child: FilledButton.tonalIcon(
-                      style: FilledButton.styleFrom(
-                        foregroundColor: const Color(0xff25D366),
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                        visualDensity: VisualDensity.compact,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  const SizedBox(width: 8),
+                  if (isPending) ...[
+                    Expanded(
+                      flex: 4,
+                      child: OutlinedButton(
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.red.shade600,
+                          side: BorderSide(color: Colors.red.shade300),
+                          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+                          visualDensity: VisualDensity.compact,
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10)),
+                        ),
+                        onPressed: () => _cancelBooking(item),
+                        child: const Text('Reject',
+                            style: TextStyle(
+                                fontWeight: FontWeight.bold, fontSize: 13)),
                       ),
-                      onPressed: () => _sendWhatsAppConfirmation(item),
-                      icon: const Icon(Icons.send_rounded, size: 16),
-                      label: const Text('Resend WhatsApp', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5)),
                     ),
-                  ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      flex: 5,
+                      child: FilledButton.icon(
+                        style: FilledButton.styleFrom(
+                          backgroundColor: const Color(0xff0369A1),
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+                          visualDensity: VisualDensity.compact,
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10)),
+                        ),
+                        onPressed: () => _confirmBooking(item),
+                        icon: const Icon(Icons.check_circle_outline_rounded, size: 16),
+                        label: const Text('Confirm',
+                            style: TextStyle(
+                                fontWeight: FontWeight.bold, fontSize: 13)),
+                      ),
+                    ),
+                  ] else if (isConfirmed) ...[
+                    Expanded(
+                      child: FilledButton.tonalIcon(
+                        style: FilledButton.styleFrom(
+                          foregroundColor: const Color(0xff25D366),
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                          visualDensity: VisualDensity.compact,
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10)),
+                        ),
+                        onPressed: () => _sendBilingualWhatsAppConfirmation(item),
+                        icon: const Icon(Icons.send_rounded, size: 16),
+                        label: const Text('Resend WhatsApp',
+                            style: TextStyle(
+                                fontWeight: FontWeight.bold, fontSize: 12.5)),
+                      ),
+                    ),
+                  ],
                 ],
-              ],
-            ),
-          ],
+              ),
+            ],
+          ),
         ),
       ),
     );

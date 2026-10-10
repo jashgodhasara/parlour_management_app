@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: nupur-beauty-parlour-booking
+    env: static
+    buildCommand: ""
+    staticPublishPath: ./online_booking_web
+    headers:
+      - path: /*
+        name: Access-Control-Allow-Origin
+        value: "*"
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html

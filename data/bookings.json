@@ -1,0 +1,15 @@
+[
+  {
+    "id": "NP-701664",
+    "bookingRef": "NP-701664",
+    "customerName": "Jash Godhasara",
+    "customerPhone": "9427451121",
+    "serviceNames": "Festive Golden Glow Package (Facial + D-Tan + Wax + Threading), Festive Party Makeup & Hair Styling Combo, Hair Spa + Herbal Cleanup + Manicure Combo",
+    "totalAmount": 4497,
+    "bookingDate": "2026-10-10",
+    "timeSlot": "12:00 PM",
+    "status": "Pending",
+    "notes": "",
+    "createdAt": "2026-10-10T12:20:00.000Z"
+  }
+]

@@ -58,6 +58,11 @@ const TIME_SLOTS = [
 // Parlour contact for direct WhatsApp message
 const PARLOUR_WHATSAPP_NUMBER = "919427451121";
 
+// Live Backend API base URL (Render or Local)
+const API_BASE_URL = (typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"))
+  ? ""
+  : (typeof window !== "undefined" && window.location.origin.includes("onrender.com") ? window.location.origin : "https://nupur-beauty-parlour.onrender.com");
+
 let selectedServices = [];
 let selectedSlot = "";
 let currentBookedSlots = [];
@@ -161,11 +166,29 @@ function updateSummary() {
   }
 }
 
-// Fetch booked slots from Firebase Firestore or Local fallback
+// Fetch booked slots from live Backend API, Firebase Firestore, or Local fallback
 async function fetchBookedSlots(dateStr) {
   const bookedSlots = [];
 
-  // 1. If Firebase Firestore is active
+  // 1. Fetch from live Backend API (Render)
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/slots?date=${encodeURIComponent(dateStr)}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data && Array.isArray(data.bookedSlots)) {
+        data.bookedSlots.forEach(s => {
+          if (s && !bookedSlots.includes(s.trim())) {
+            bookedSlots.push(s.trim());
+          }
+        });
+        console.log(`Fetched ${bookedSlots.length} booked slots from Backend API for ${dateStr}:`, bookedSlots);
+      }
+    }
+  } catch (e) {
+    console.warn("Backend API slot fetch error:", e);
+  }
+
+  // 2. If Firebase Firestore is active
   if (db && isFirebaseActive) {
     try {
       const snapshot = await db.collection("online_bookings")
@@ -177,24 +200,25 @@ async function fetchBookedSlots(dateStr) {
         // Slots with 'Pending' or 'Confirmed' are considered booked/reserved
         // Only 'Cancelled' slots are released and available
         if (data.status !== "Cancelled" && data.timeSlot) {
-          bookedSlots.push(data.timeSlot.trim());
+          const s = data.timeSlot.trim();
+          if (!bookedSlots.includes(s)) bookedSlots.push(s);
         }
       });
       console.log(`Fetched ${bookedSlots.length} booked slots from Firestore for ${dateStr}:`, bookedSlots);
-      return bookedSlots;
     } catch (e) {
       console.error("Firestore error while fetching booked slots:", e);
     }
   }
 
-  // 2. Fallback to localStorage bookings
+  // 3. Fallback to localStorage bookings
   try {
     const raw = localStorage.getItem("nupur_bookings");
     if (raw) {
       const list = JSON.parse(raw);
       list.forEach(b => {
         if (b.bookingDate === dateStr && b.status !== "Cancelled" && b.timeSlot) {
-          bookedSlots.push(b.timeSlot.trim());
+          const s = b.timeSlot.trim();
+          if (!bookedSlots.includes(s)) bookedSlots.push(s);
         }
       });
     }
@@ -378,14 +402,32 @@ function setupFormListener() {
     submitBtn.innerHTML = `<span>⏳</span> વિનંતી મોકલાઈ રહી છે... (Submitting...)`;
 
     try {
-      // 1. Write to Firestore if connected
+      // 1. Submit to Backend REST API (Render / Express)
+      try {
+        const apiRes = await fetch(`${API_BASE_URL}/api/bookings`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(bookingData)
+        });
+        if (apiRes.ok) {
+          const resJson = await apiRes.json();
+          if (resJson && resJson.booking && resJson.booking.id) {
+            bookingData.id = resJson.booking.id;
+          }
+          console.log("✅ Booking successfully saved to Backend API:", bookingData.id);
+        }
+      } catch (apiErr) {
+        console.warn("Failed to post to backend API:", apiErr);
+      }
+
+      // 2. Write to Firestore if connected
       if (db && isFirebaseActive) {
         const docRef = await db.collection("online_bookings").add(bookingData);
         bookingData.id = docRef.id;
         console.log("Booking successfully added to Firestore with ID:", docRef.id);
       }
 
-      // 2. Also cache in localStorage
+      // 3. Also cache in localStorage
       const existing = JSON.parse(localStorage.getItem("nupur_bookings") || "[]");
       existing.push(bookingData);
       localStorage.setItem("nupur_bookings", JSON.stringify(existing));

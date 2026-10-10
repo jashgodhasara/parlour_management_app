@@ -3996,8 +3996,21 @@ class _AppointmentsPageState extends State<_AppointmentsPage> {
         list = decoded.map((e) => OnlineBooking.fromJson(e as Map<String, dynamic>)).toList();
       }
 
+      // 1. Fetch live from Render Backend API
+      try {
+        final apiList = await FirestoreBookingService.fetchFromBackendApi();
+        if (apiList.isNotEmpty) {
+          final map = {for (var b in list) b.id: b};
+          for (var b in apiList) {
+            map[b.id] = b;
+          }
+          list = map.values.toList();
+        }
+      } catch (_) {}
+
+      // 2. Fetch from Firestore if configured
       final projId = await FirestoreBookingService.getProjectId();
-      if (projId.isNotEmpty) {
+      if (projId.isNotEmpty && projId != FirestoreBookingService.defaultProjectId) {
         try {
           final live = await FirestoreBookingService.fetchFromFirestore(projId);
           if (live.isNotEmpty) {
@@ -4059,8 +4072,13 @@ class _AppointmentsPageState extends State<_AppointmentsPage> {
       );
     }
 
+    // 1. Update status on Render Backend API & Firestore
+    await FirestoreBookingService.updateStatusOnBackendApi(
+      bookingId: booking.id,
+      newStatus: 'Confirmed',
+    );
     final projId = await FirestoreBookingService.getProjectId();
-    if (projId.isNotEmpty) {
+    if (projId.isNotEmpty && projId != FirestoreBookingService.defaultProjectId) {
       await FirestoreBookingService.updateStatusInFirestore(
         projectId: projId,
         docId: booking.id,
@@ -4125,8 +4143,13 @@ class _AppointmentsPageState extends State<_AppointmentsPage> {
   }
 
   Future<void> _rejectOnlineBookingDirectly(OnlineBooking booking) async {
+    // 1. Update status on Render Backend API & Firestore
+    await FirestoreBookingService.updateStatusOnBackendApi(
+      bookingId: booking.id,
+      newStatus: 'Cancelled',
+    );
     final projId = await FirestoreBookingService.getProjectId();
-    if (projId.isNotEmpty) {
+    if (projId.isNotEmpty && projId != FirestoreBookingService.defaultProjectId) {
       await FirestoreBookingService.updateStatusInFirestore(
         projectId: projId,
         docId: booking.id,
@@ -4355,7 +4378,7 @@ class _AppointmentsPageState extends State<_AppointmentsPage> {
             ),
             if (widget.onOpenOnlineBookings != null) ...[
               IconButton.filledTonal(
-                tooltip: 'Online Bookings',
+                tooltip: 'Online Bookings (વેબસાઇટ બુકિંગ)',
                 style: IconButton.styleFrom(
                   backgroundColor: const Color(0xff0369A1).withOpacity(0.12),
                   foregroundColor: const Color(0xff0369A1),
@@ -4366,6 +4389,27 @@ class _AppointmentsPageState extends State<_AppointmentsPage> {
               ),
               const SizedBox(width: 8),
             ],
+            IconButton.tonal(
+              tooltip: 'Refresh Bookings (રીફ્રેશ)',
+              style: IconButton.styleFrom(
+                backgroundColor: Colors.blue.shade50,
+                foregroundColor: const Color(0xff0369A1),
+                padding: const EdgeInsets.all(12),
+              ),
+              onPressed: () async {
+                await _loadOnlineBookings();
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('🔄 ઓનલાઇન બુકિંગ રીફ્રેશ થઈ ગયું!'),
+                      duration: Duration(seconds: 1),
+                    ),
+                  );
+                }
+              },
+              icon: const Icon(Icons.refresh_rounded),
+            ),
+            const SizedBox(width: 8),
             FilledButton(
               onPressed: widget.onAddAppointment,
               style: FilledButton.styleFrom(

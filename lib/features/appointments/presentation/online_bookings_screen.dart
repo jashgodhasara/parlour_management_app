@@ -148,11 +148,13 @@ class OnlineBooking {
   }
 }
 
-/// Firebase Firestore REST Service for Online Bookings
+/// Firebase Firestore & Live Backend API Service for Online Bookings
 class FirestoreBookingService {
   static const String defaultProjectId = 'parlour-management-app';
   static const String defaultBookingUrl =
-      'http://192.168.1.11/dipa/parlour_management_app/online_booking_web/';
+      'https://nupur-beauty-parlour.onrender.com/';
+  static const String defaultBackendApiUrl =
+      'https://nupur-beauty-parlour.onrender.com/api';
   static const String prefsKeyProjectId = 'firebase_firestore_project_id';
   static const String prefsKeyBookingUrl = 'online_booking_web_url';
 
@@ -174,6 +176,61 @@ class FirestoreBookingService {
   static Future<void> saveBookingUrl(String url) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(prefsKeyBookingUrl, url.trim());
+  }
+
+  /// Fetch bookings from live Render Backend API
+  static Future<List<OnlineBooking>> fetchFromBackendApi() async {
+    try {
+      final url = Uri.parse('$defaultBackendApiUrl/bookings');
+      final response = await http.get(url).timeout(const Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is List) {
+          return decoded
+              .map((e) => OnlineBooking.fromJson(e as Map<String, dynamic>))
+              .toList();
+        }
+      }
+    } catch (e) {
+      debugPrint('Error fetching from Render Backend API: $e');
+    }
+    return [];
+  }
+
+  /// Update booking status on Render Backend API ('Confirmed' or 'Cancelled')
+  static Future<bool> updateStatusOnBackendApi({
+    required String bookingId,
+    required String newStatus,
+  }) async {
+    try {
+      final url = Uri.parse('$defaultBackendApiUrl/bookings/$bookingId/status');
+      final response = await http.post(
+        url,
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'status': newStatus}),
+      ).timeout(const Duration(seconds: 10));
+      return response.statusCode == 200;
+    } catch (e) {
+      debugPrint('Error updating status on Render API: $e');
+      return false;
+    }
+  }
+
+  /// Sync app manual appointments to Render Backend API so slots are locked on website
+  static Future<bool> syncAppAppointmentsToBackendApi(
+      List<Map<String, dynamic>> appointments) async {
+    try {
+      final url = Uri.parse('$defaultBackendApiUrl/sync-app-appointments');
+      final response = await http.post(
+        url,
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'appointments': appointments}),
+      ).timeout(const Duration(seconds: 10));
+      return response.statusCode == 200;
+    } catch (e) {
+      debugPrint('Error syncing app appointments to Render API: $e');
+      return false;
+    }
   }
 
   /// Fetch bookings from Firestore REST API
@@ -337,14 +394,31 @@ class _OnlineBookingsScreenState extends State<OnlineBookingsScreen> {
       }
     }
 
-    // 2. Fetch live from Firestore
+    // 2. Fetch live from Render Backend API
+    bool syncedWithBackend = false;
+    try {
+      final apiList = await FirestoreBookingService.fetchFromBackendApi();
+      if (apiList.isNotEmpty) {
+        final Map<String, OnlineBooking> map = {
+          for (var b in localList) b.id: b,
+        };
+        for (var b in apiList) {
+          map[b.id] = b;
+        }
+        localList = map.values.toList();
+        syncedWithBackend = true;
+      }
+    } catch (e) {
+      debugPrint('Backend API fetch error: $e');
+    }
+
+    // 3. Fetch live from Firestore if configured
     bool syncedWithFirestore = false;
     try {
-      if (_firebaseProjectId.isNotEmpty) {
+      if (_firebaseProjectId.isNotEmpty && _firebaseProjectId != FirestoreBookingService.defaultProjectId) {
         final firestoreList =
             await FirestoreBookingService.fetchFromFirestore(_firebaseProjectId);
         if (firestoreList.isNotEmpty) {
-          // Merge or replace with firestore list
           final Map<String, OnlineBooking> map = {
             for (var b in localList) b.id: b,
           };
@@ -359,7 +433,7 @@ class _OnlineBookingsScreenState extends State<OnlineBookingsScreen> {
       debugPrint('Firestore fetch failed (using local cache): $e');
     }
 
-    // 3. Fallback mock data if completely empty
+    // 4. Fallback mock data if completely empty
     if (localList.isEmpty) {
       localList = [
         OnlineBooking(
@@ -610,8 +684,12 @@ class _OnlineBookingsScreenState extends State<OnlineBookingsScreen> {
       amount: booking.totalAmount,
     );
 
-    // 2. Update status in Firestore
-    if (_firebaseProjectId.isNotEmpty) {
+    // 2. Update status in Render Backend API & Firestore
+    await FirestoreBookingService.updateStatusOnBackendApi(
+      bookingId: booking.id,
+      newStatus: 'Confirmed',
+    );
+    if (_firebaseProjectId.isNotEmpty && _firebaseProjectId != FirestoreBookingService.defaultProjectId) {
       await FirestoreBookingService.updateStatusInFirestore(
         projectId: _firebaseProjectId,
         docId: booking.id,
@@ -719,8 +797,12 @@ class _OnlineBookingsScreenState extends State<OnlineBookingsScreen> {
 
     if (confirm != true) return;
 
-    // Update in Firestore
-    if (_firebaseProjectId.isNotEmpty) {
+    // Update in Render Backend API & Firestore
+    await FirestoreBookingService.updateStatusOnBackendApi(
+      bookingId: booking.id,
+      newStatus: 'Cancelled',
+    );
+    if (_firebaseProjectId.isNotEmpty && _firebaseProjectId != FirestoreBookingService.defaultProjectId) {
       await FirestoreBookingService.updateStatusInFirestore(
         projectId: _firebaseProjectId,
         docId: booking.id,

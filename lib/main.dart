@@ -4389,7 +4389,7 @@ class _AppointmentsPageState extends State<_AppointmentsPage> {
               ),
               const SizedBox(width: 8),
             ],
-            IconButton.tonal(
+            IconButton.filledTonal(
               tooltip: 'Refresh Bookings (રીફ્રેશ)',
               style: IconButton.styleFrom(
                 backgroundColor: Colors.blue.shade50,

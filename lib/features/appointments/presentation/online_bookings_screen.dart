@@ -153,6 +153,8 @@ class FirestoreBookingService {
   static const String defaultProjectId = 'parlour-management-app';
   static const String defaultBookingUrl =
       'https://nupur-beauty-parlour.onrender.com/';
+  static const String cloudStorageUrl =
+      'https://api.restful-api.dev/objects/ff808181a09d98f701a124c3537f33ed';
   static const String defaultBackendApiUrl =
       'https://nupur-beauty-parlour.onrender.com/api';
   static const List<String> backendEndpoints = [
@@ -183,8 +185,29 @@ class FirestoreBookingService {
     await prefs.setString(prefsKeyBookingUrl, url.trim());
   }
 
-  /// Fetch bookings from live Backend API (tries Render, then local Wi-Fi)
+  /// Fetch bookings from Global Cloud Store and live Backend API
   static Future<List<OnlineBooking>> fetchFromBackendApi() async {
+    // 1. Fetch from Global Cloud Store (instant 24/7 internet sync without any server)
+    try {
+      final res = await http
+          .get(Uri.parse(cloudStorageUrl))
+          .timeout(const Duration(seconds: 5));
+      if (res.statusCode == 200) {
+        final decoded = jsonDecode(res.body);
+        if (decoded is Map && decoded['data'] is Map) {
+          final list = decoded['data']['bookings'] as List<dynamic>? ?? [];
+          if (list.isNotEmpty) {
+            return list
+                .map((e) => OnlineBooking.fromJson(e as Map<String, dynamic>))
+                .toList();
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Cloud DB fetch error: $e');
+    }
+
+    // 2. Fetch from backendEndpoints
     for (final base in backendEndpoints) {
       try {
         final url = Uri.parse('$base/bookings');
@@ -203,12 +226,45 @@ class FirestoreBookingService {
     return [];
   }
 
-  /// Update booking status on Backend API ('Confirmed' or 'Cancelled')
+  /// Update booking status on Global Cloud Store & Backend API ('Confirmed' or 'Cancelled')
   static Future<bool> updateStatusOnBackendApi({
     required String bookingId,
     required String newStatus,
   }) async {
     bool ok = false;
+
+    // 1. Update in Global Cloud Store
+    try {
+      final res = await http
+          .get(Uri.parse(cloudStorageUrl))
+          .timeout(const Duration(seconds: 5));
+      if (res.statusCode == 200) {
+        final decoded = jsonDecode(res.body) as Map<String, dynamic>;
+        final data = decoded['data'] as Map<String, dynamic>? ?? {};
+        final list = data['bookings'] as List<dynamic>? ?? [];
+        for (var item in list) {
+          if (item is Map &&
+              (item['id'] == bookingId || item['bookingRef'] == bookingId)) {
+            item['status'] = newStatus;
+          }
+        }
+        final putRes = await http
+            .put(
+              Uri.parse(cloudStorageUrl),
+              headers: {'Content-Type': 'application/json'},
+              body: jsonEncode(
+                  {'name': 'nupur_bookings', 'data': {'bookings': list}}),
+            )
+            .timeout(const Duration(seconds: 5));
+        if (putRes.statusCode == 200) {
+          ok = true;
+        }
+      }
+    } catch (e) {
+      debugPrint('Cloud status update error: $e');
+    }
+
+    // 2. Update on backendEndpoints
     for (final base in backendEndpoints) {
       try {
         final url = Uri.parse('$base/bookings/$bookingId/status');

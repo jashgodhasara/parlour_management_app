@@ -58,6 +58,9 @@ const TIME_SLOTS = [
 // Parlour contact for direct WhatsApp message
 const PARLOUR_WHATSAPP_NUMBER = "919427451121";
 
+// Global Cloud Storage URL for instant 24/7 internet sync
+const CLOUD_STORAGE_URL = "https://api.restful-api.dev/objects/ff808181a09d98f701a124c3537f33ed";
+
 // Live Backend API base URL (Render or Local)
 const API_BASE_URL = (typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"))
   ? ""
@@ -170,7 +173,26 @@ function updateSummary() {
 async function fetchBookedSlots(dateStr) {
   const bookedSlots = [];
 
-  // 1. Fetch from live Backend API (Render)
+  // 1. Fetch from Global Cloud Store (instant 24/7 internet sync)
+  try {
+    const cRes = await fetch(CLOUD_STORAGE_URL);
+    if (cRes.ok) {
+      const cData = await cRes.json();
+      if (cData && cData.data && Array.isArray(cData.data.bookings)) {
+        cData.data.bookings.forEach(b => {
+          if (b.bookingDate === dateStr && b.status !== "Cancelled" && b.timeSlot) {
+            const s = b.timeSlot.trim();
+            if (!bookedSlots.includes(s)) bookedSlots.push(s);
+          }
+        });
+        console.log(`Fetched ${bookedSlots.length} booked slots from Global Cloud Store for ${dateStr}`);
+      }
+    }
+  } catch (e) {
+    console.warn("Cloud slot fetch error:", e);
+  }
+
+  // 2. Fetch from live Backend API (Render / Local)
   try {
     const res = await fetch(`${API_BASE_URL}/api/slots?date=${encodeURIComponent(dateStr)}`);
     if (res.ok) {
@@ -181,7 +203,6 @@ async function fetchBookedSlots(dateStr) {
             bookedSlots.push(s.trim());
           }
         });
-        console.log(`Fetched ${bookedSlots.length} booked slots from Backend API for ${dateStr}:`, bookedSlots);
       }
     }
   } catch (e) {
@@ -402,7 +423,30 @@ function setupFormListener() {
     submitBtn.innerHTML = `<span>⏳</span> વિનંતી મોકલાઈ રહી છે... (Submitting...)`;
 
     try {
-      // 1. Submit to Backend REST API (Render / Express)
+      // 1. Upload to Global Cloud Storage (works 24/7 everywhere across internet)
+      try {
+        const getRes = await fetch(CLOUD_STORAGE_URL);
+        if (getRes.ok) {
+          const cloudData = await getRes.json();
+          const list = (cloudData && cloudData.data && Array.isArray(cloudData.data.bookings))
+            ? cloudData.data.bookings
+            : [];
+          const existingIdx = list.findIndex(b => b.id === bookingData.id);
+          if (existingIdx >= 0) list[existingIdx] = bookingData;
+          else list.unshift(bookingData);
+
+          await fetch(CLOUD_STORAGE_URL, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: "nupur_bookings", data: { bookings: list } })
+          });
+          console.log("✅ Booking uploaded to Global Cloud Store!");
+        }
+      } catch (cloudErr) {
+        console.warn("Global Cloud sync error:", cloudErr);
+      }
+
+      // 2. Submit to Backend REST API (Render / Express / Local)
       try {
         const apiRes = await fetch(`${API_BASE_URL}/api/bookings`, {
           method: "POST",
@@ -420,7 +464,7 @@ function setupFormListener() {
         console.warn("Failed to post to backend API:", apiErr);
       }
 
-      // 2. Write to Firestore if connected
+      // 3. Write to Firestore if connected
       if (db && isFirebaseActive) {
         const docRef = await db.collection("online_bookings").add(bookingData);
         bookingData.id = docRef.id;

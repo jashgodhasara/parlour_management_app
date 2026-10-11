@@ -218,6 +218,25 @@ app.post('/api/sync-app-appointments', (req, res) => {
   res.json({ success: true, message: 'App appointments synced to website slots.' });
 });
 
+// Download updated Android APK directly from phone browser
+app.get('/download', (req, res) => {
+  const apkPath = path.join(__dirname, 'build', 'app', 'outputs', 'flutter-apk', 'app-release.apk');
+  if (fs.existsSync(apkPath)) {
+    res.download(apkPath, 'parlour_management_app.apk');
+  } else {
+    res.status(404).send('APK not found. Please build release APK.');
+  }
+});
+
+app.get('/app.apk', (req, res) => {
+  const apkPath = path.join(__dirname, 'build', 'app', 'outputs', 'flutter-apk', 'app-release.apk');
+  if (fs.existsSync(apkPath)) {
+    res.download(apkPath, 'parlour_management_app.apk');
+  } else {
+    res.status(404).send('APK not found.');
+  }
+});
+
 // Serve frontend static files
 app.use(express.static(path.join(__dirname, 'online_booking_web')));
 

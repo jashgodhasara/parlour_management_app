@@ -191,14 +191,14 @@ class FirestoreBookingService {
     try {
       final res = await http
           .get(Uri.parse(cloudStorageUrl))
-          .timeout(const Duration(seconds: 5));
+          .timeout(const Duration(seconds: 10));
       if (res.statusCode == 200) {
         final decoded = jsonDecode(res.body);
         if (decoded is Map && decoded['data'] is Map) {
           final list = decoded['data']['bookings'] as List<dynamic>? ?? [];
           if (list.isNotEmpty) {
             return list
-                .map((e) => OnlineBooking.fromJson(e as Map<String, dynamic>))
+                .map((e) => OnlineBooking.fromJson(Map<String, dynamic>.from(e as Map)))
                 .toList();
           }
         }
@@ -217,7 +217,7 @@ class FirestoreBookingService {
           final decoded = jsonDecode(response.body);
           if (decoded is List) {
             return decoded
-                .map((e) => OnlineBooking.fromJson(e as Map<String, dynamic>))
+                .map((e) => OnlineBooking.fromJson(Map<String, dynamic>.from(e as Map)))
                 .toList();
           }
         }
@@ -237,27 +237,29 @@ class FirestoreBookingService {
     try {
       final res = await http
           .get(Uri.parse(cloudStorageUrl))
-          .timeout(const Duration(seconds: 5));
+          .timeout(const Duration(seconds: 10));
       if (res.statusCode == 200) {
-        final decoded = jsonDecode(res.body) as Map<String, dynamic>;
-        final data = decoded['data'] as Map<String, dynamic>? ?? {};
-        final list = data['bookings'] as List<dynamic>? ?? [];
-        for (var item in list) {
-          if (item is Map &&
-              (item['id'] == bookingId || item['bookingRef'] == bookingId)) {
-            item['status'] = newStatus;
+        final decoded = jsonDecode(res.body);
+        if (decoded is Map && decoded['data'] is Map) {
+          final list =
+              (decoded['data']['bookings'] as List<dynamic>? ?? []).map((e) {
+            final m = Map<String, dynamic>.from(e as Map);
+            if (m['id'] == bookingId || m['bookingRef'] == bookingId) {
+              m['status'] = newStatus;
+            }
+            return m;
+          }).toList();
+          final putRes = await http
+              .put(
+                Uri.parse(cloudStorageUrl),
+                headers: {'Content-Type': 'application/json'},
+                body: jsonEncode(
+                    {'name': 'nupur_bookings', 'data': {'bookings': list}}),
+              )
+              .timeout(const Duration(seconds: 10));
+          if (putRes.statusCode == 200) {
+            ok = true;
           }
-        }
-        final putRes = await http
-            .put(
-              Uri.parse(cloudStorageUrl),
-              headers: {'Content-Type': 'application/json'},
-              body: jsonEncode(
-                  {'name': 'nupur_bookings', 'data': {'bookings': list}}),
-            )
-            .timeout(const Duration(seconds: 5));
-        if (putRes.statusCode == 200) {
-          ok = true;
         }
       }
     } catch (e) {
@@ -459,7 +461,7 @@ class _OnlineBookingsScreenState extends State<OnlineBookingsScreen> {
       try {
         final List<dynamic> list = jsonDecode(rawJson) as List<dynamic>;
         localList = list
-            .map((item) => OnlineBooking.fromJson(item as Map<String, dynamic>))
+            .map((item) => OnlineBooking.fromJson(Map<String, dynamic>.from(item as Map)))
             .toList();
       } catch (e) {
         debugPrint('Error decoding local bookings: $e');
@@ -533,7 +535,15 @@ class _OnlineBookingsScreenState extends State<OnlineBookingsScreen> {
     if (mounted) {
       setState(() => _isLoading = false);
 
-      if (syncedWithFirestore) {
+      if (syncedWithBackend) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('✅ ${_bookings.length} ઓનલાઇન બુકિંગ ક્લાઉડમાંથી મળ્યા!'),
+            backgroundColor: const Color(0xff0369A1),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      } else if (syncedWithFirestore) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('✅ Synced with Firebase Firestore!'),

@@ -3993,7 +3993,7 @@ class _AppointmentsPageState extends State<_AppointmentsPage> {
       List<OnlineBooking> list = [];
       if (raw != null && raw.isNotEmpty) {
         final decoded = jsonDecode(raw) as List<dynamic>;
-        list = decoded.map((e) => OnlineBooking.fromJson(e as Map<String, dynamic>)).toList();
+        list = decoded.map((e) => OnlineBooking.fromJson(Map<String, dynamic>.from(e as Map))).toList();
       }
 
       // 1. Fetch live from Render Backend API

@@ -404,6 +404,7 @@ function setupFormListener() {
     const bookingRef = "NP-" + Math.floor(100000 + Math.random() * 900000);
 
     const bookingData = {
+      id: bookingRef,
       bookingRef,
       customerName: name,
       customerPhone: phone,
@@ -425,13 +426,13 @@ function setupFormListener() {
     try {
       // 1. Upload to Global Cloud Storage (works 24/7 everywhere across internet)
       try {
-        const getRes = await fetch(CLOUD_STORAGE_URL);
+        const getRes = await fetch(CLOUD_STORAGE_URL, { cache: "no-store" });
         if (getRes.ok) {
           const cloudData = await getRes.json();
           const list = (cloudData && cloudData.data && Array.isArray(cloudData.data.bookings))
             ? cloudData.data.bookings
             : [];
-          const existingIdx = list.findIndex(b => b.id === bookingData.id);
+          const existingIdx = list.findIndex(b => (b.id && b.id === bookingData.id) || (b.bookingRef && b.bookingRef === bookingData.bookingRef));
           if (existingIdx >= 0) list[existingIdx] = bookingData;
           else list.unshift(bookingData);
 

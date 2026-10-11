@@ -154,7 +154,7 @@ class FirestoreBookingService {
   static const String defaultBookingUrl =
       'https://nupur-beauty-parlour.onrender.com/';
   static const String cloudStorageUrl =
-      'https://api.restful-api.dev/objects/ff808181a09d98f701a124c3537f33ed';
+      'https://crudcrud.com/api/3ab44908d0ed4fe0ba41a7ae4600b357/bookings';
   static const String defaultBackendApiUrl =
       'https://nupur-beauty-parlour.onrender.com/api';
   static const List<String> backendEndpoints = [
@@ -194,7 +194,14 @@ class FirestoreBookingService {
           .timeout(const Duration(seconds: 10));
       if (res.statusCode == 200) {
         final decoded = jsonDecode(res.body);
-        if (decoded is Map && decoded['data'] is Map) {
+        if (decoded is List) {
+          final list = decoded.map((e) {
+            final m = Map<String, dynamic>.from(e as Map);
+            final id = m['_id']?.toString() ?? m['id']?.toString();
+            return OnlineBooking.fromJson(m, id);
+          }).toList();
+          if (list.isNotEmpty) return list;
+        } else if (decoded is Map && decoded['data'] is Map) {
           final list = decoded['data']['bookings'] as List<dynamic>? ?? [];
           if (list.isNotEmpty) {
             return list
@@ -240,25 +247,27 @@ class FirestoreBookingService {
           .timeout(const Duration(seconds: 10));
       if (res.statusCode == 200) {
         final decoded = jsonDecode(res.body);
-        if (decoded is Map && decoded['data'] is Map) {
-          final list =
-              (decoded['data']['bookings'] as List<dynamic>? ?? []).map((e) {
-            final m = Map<String, dynamic>.from(e as Map);
-            if (m['id'] == bookingId || m['bookingRef'] == bookingId) {
-              m['status'] = newStatus;
+        if (decoded is List) {
+          for (var item in decoded) {
+            if (item is Map) {
+              final m = Map<String, dynamic>.from(item);
+              final id = m['_id']?.toString() ?? m['id']?.toString();
+              if (id == bookingId || m['bookingRef'] == bookingId) {
+                final updateId = m['_id']?.toString();
+                m.remove('_id');
+                m['status'] = newStatus;
+                if (updateId != null && updateId.isNotEmpty) {
+                  final putRes = await http.put(
+                    Uri.parse('$cloudStorageUrl/$updateId'),
+                    headers: {'Content-Type': 'application/json'},
+                    body: jsonEncode(m),
+                  ).timeout(const Duration(seconds: 10));
+                  if (putRes.statusCode == 200) {
+                    ok = true;
+                  }
+                }
+              }
             }
-            return m;
-          }).toList();
-          final putRes = await http
-              .put(
-                Uri.parse(cloudStorageUrl),
-                headers: {'Content-Type': 'application/json'},
-                body: jsonEncode(
-                    {'name': 'nupur_bookings', 'data': {'bookings': list}}),
-              )
-              .timeout(const Duration(seconds: 10));
-          if (putRes.statusCode == 200) {
-            ok = true;
           }
         }
       }

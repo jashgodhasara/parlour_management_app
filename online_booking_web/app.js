@@ -59,7 +59,7 @@ const TIME_SLOTS = [
 const PARLOUR_WHATSAPP_NUMBER = "919427451121";
 
 // Global Cloud Storage URL for instant 24/7 internet sync
-const CLOUD_STORAGE_URL = "https://api.restful-api.dev/objects/ff808181a09d98f701a124c3537f33ed";
+const CLOUD_STORAGE_URL = "https://crudcrud.com/api/3ab44908d0ed4fe0ba41a7ae4600b357/bookings";
 
 // Live Backend API base URL (Render or Local)
 const API_BASE_URL = (typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"))
@@ -175,11 +175,11 @@ async function fetchBookedSlots(dateStr) {
 
   // 1. Fetch from Global Cloud Store (instant 24/7 internet sync)
   try {
-    const cRes = await fetch(CLOUD_STORAGE_URL);
+    const cRes = await fetch(CLOUD_STORAGE_URL, { cache: "no-store" });
     if (cRes.ok) {
-      const cData = await cRes.json();
-      if (cData && cData.data && Array.isArray(cData.data.bookings)) {
-        cData.data.bookings.forEach(b => {
+      const list = await cRes.json();
+      if (Array.isArray(list)) {
+        list.forEach(b => {
           if (b.bookingDate === dateStr && b.status !== "Cancelled" && b.timeSlot) {
             const s = b.timeSlot.trim();
             if (!bookedSlots.includes(s)) bookedSlots.push(s);
@@ -426,21 +426,14 @@ function setupFormListener() {
     try {
       // 1. Upload to Global Cloud Storage (works 24/7 everywhere across internet)
       try {
-        const getRes = await fetch(CLOUD_STORAGE_URL, { cache: "no-store" });
-        if (getRes.ok) {
-          const cloudData = await getRes.json();
-          const list = (cloudData && cloudData.data && Array.isArray(cloudData.data.bookings))
-            ? cloudData.data.bookings
-            : [];
-          const existingIdx = list.findIndex(b => (b.id && b.id === bookingData.id) || (b.bookingRef && b.bookingRef === bookingData.bookingRef));
-          if (existingIdx >= 0) list[existingIdx] = bookingData;
-          else list.unshift(bookingData);
-
-          await fetch(CLOUD_STORAGE_URL, {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ name: "nupur_bookings", data: { bookings: list } })
-          });
+        const postRes = await fetch(CLOUD_STORAGE_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(bookingData)
+        });
+        if (postRes.ok) {
+          const resObj = await postRes.json();
+          if (resObj && resObj._id) bookingData.id = resObj._id;
           console.log("✅ Booking uploaded to Global Cloud Store!");
         }
       } catch (cloudErr) {
